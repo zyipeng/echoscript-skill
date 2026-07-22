@@ -60,7 +60,7 @@ python3 scripts/media_ingest.py ingest "BILIBILI_URL" \
 - Do not alter the original file.
 - Use `ffprobe` to validate media and duration before ASR.
 - Run `local_asr.py doctor` before any ASR setup. Reuse a detected local model; when none exists, offer FunASR SenseVoiceSmall as the first download choice.
-- FunASR runs locally on CPU. A previously cached MLX model is also valid and should be reused instead of forcing another download.
+- FunASR runs locally on CPU. Reuse a previously cached MLX model when it passes the quality gate; `whisper-tiny` requires a warning and explicit acceptance because it is smoke-test-only.
 - MLX Whisper needs Metal access on Apple Silicon. A sandboxed `No Metal device available` error means the same command must be rerun with host permission; it does not require an API key.
 
 ## Failure language

@@ -21,6 +21,13 @@ def run_json(command: list[str], env: dict[str, str] | None = None) -> dict:
     return json.loads(result.stdout)
 
 
+def run_failure(command: list[str]) -> str:
+    result = subprocess.run(command, text=True, capture_output=True)
+    if result.returncode == 0:
+        raise RuntimeError("command unexpectedly succeeded")
+    return result.stderr
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="EchoScript local self-test")
     parser.add_argument("--output-dir", required=True)
@@ -93,6 +100,15 @@ def main() -> int:
     chunks_dir = output / "chunks"
     run([sys.executable, str(root / "chunk_transcript.py"), str(transcript_path), "--output-dir", str(chunks_dir), "--max-chars", "2000"])
 
+    chinese_transcript = {**transcript, "language": "zh"}
+    chinese_path = output / "transcript.zh.json"
+    chinese_path.write_text(json.dumps(chinese_transcript, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    chinese_chunks = output / "chunks-zh"
+    run([sys.executable, str(root / "chunk_transcript.py"), str(chinese_path), "--output-dir", str(chinese_chunks)])
+    chinese_index = json.loads((chinese_chunks / "index.json").read_text(encoding="utf-8"))
+    if chinese_index["max_chars"] != 8000:
+        raise RuntimeError("CJK transcript did not use the 8000-character adaptive default")
+
     document = output / "document.md"
     document.write_text(
         """# EchoScript 本地测试
@@ -137,12 +153,30 @@ def main() -> int:
     exports = output / "exports"
     run([sys.executable, str(root / "document_export.py"), "export", str(document), "--output-dir", str(exports), "--formats", "md,docx,pdf", "--name", "echoscript-self-test"])
     run([sys.executable, str(root / "document_export.py"), "validate", str(exports)])
+
+    single_export = output / "single-format"
+    run([sys.executable, str(root / "document_export.py"), "export", str(document), "--output-dir", str(single_export), "--formats", "docx", "--name", "word-only"])
+    single_files = sorted(path.name for path in single_export.iterdir())
+    if single_files != ["word-only.docx"]:
+        raise RuntimeError(f"single-format export created unexpected files: {single_files}")
+
+    unresolved = output / "unresolved.md"
+    unresolved.write_text("# Invalid\n\n## 内容\n\n{{未替换内容}}\n", encoding="utf-8")
+    placeholder_error = run_failure([
+        sys.executable, str(root / "document_export.py"), "export", str(unresolved),
+        "--output-dir", str(output / "invalid-export"), "--formats", "md",
+    ])
+    if "未替换占位符" not in placeholder_error:
+        raise RuntimeError("exporter did not reject an unresolved template placeholder")
     print(json.dumps({
         "ok": True,
         "asr_detection": {
             "empty_action": no_model["recommended_action"],
             "existing_model_action": existing_model["recommended_action"],
         },
+        "adaptive_chunk_chars": chinese_index["max_chars"],
+        "single_format_export": single_files,
+        "placeholder_rejected": True,
         "ingest_manifest": str(ingest_dir / "source.json"),
         "chunk_index": str(chunks_dir / "index.json"),
         "exports": [str(path) for path in sorted(exports.iterdir())],

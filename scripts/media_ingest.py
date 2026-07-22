@@ -581,6 +581,15 @@ def pick(*values: Any) -> str:
     return ""
 
 
+def infer_text_language(*values: Any) -> str:
+    text = " ".join(str(value or "") for value in values)
+    cjk_count = len(re.findall(r"[\u3400-\u4dbf\u4e00-\u9fff]", text))
+    letter_count = sum(character.isalpha() for character in text)
+    if cjk_count >= 4 and cjk_count / max(letter_count, 1) >= 0.2:
+        return "zh"
+    return "unknown"
+
+
 def ingest_xiaoyuzhou(source: str, args: argparse.Namespace, output_dir: Path) -> tuple[dict[str, Any], None]:
     safe_source = normalize_xiaoyuzhou_episode_url(source)
     opener = build_opener(SafeXiaoyuzhouRedirect())
@@ -633,16 +642,23 @@ def ingest_xiaoyuzhou(source: str, args: argparse.Namespace, output_dir: Path) -
             "-o", str(destination), audio_url,
         ], timeout=7250)
         audio_path = str(destination.resolve())
+    description = pick(
+        episode.get("description"),
+        episode.get("shownotes"),
+        schema.get("description"),
+        parser.metadata.get("og:description"),
+        parser.metadata.get("description"),
+    )
     manifest = {
         "platform": "xiaoyuzhou",
         "source_url": final_url,
         "title": title,
         "author": pick(podcast.get("title"), podcast.get("name"), (schema.get("partOfSeries") or {}).get("name"), "小宇宙"),
-        "description": pick(episode.get("description"), episode.get("shownotes"), schema.get("description"), parser.metadata.get("og:description"), parser.metadata.get("description")),
+        "description": description,
         "published_at": pick(episode.get("pubDate"), episode.get("publishedAt"), episode.get("createdAt"), schema.get("datePublished")),
         "duration_seconds": duration_value,
         "cover_url": pick(parser.metadata.get("og:image"), (episode.get("image") or {}).get("url"), episode.get("coverUrl")),
-        "language": "unknown",
+        "language": infer_text_language(title, description),
         "audio_path": audio_path,
         "transcript_origin": None,
         "platform_id": final_url.rstrip("/").split("/")[-1],
@@ -726,4 +742,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

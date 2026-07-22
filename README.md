@@ -23,7 +23,7 @@ EchoScript 可以处理：
 2. 没有字幕时，检测并调用本地 ASR 模型转写。
 3. 由当前 Codex Agent 完成文字稿校对、英文翻译成中文和内容总结。
 4. 分别生成 `快速摘要`、`详细总结` 和 `灵感选题`。
-5. 导出 Markdown、Word DOCX 和 PDF。
+5. 只导出用户选择的 Markdown、Word DOCX 或 PDF 格式。
 
 翻译、校对和总结不接入外部 LLM API。Notion 和飞书同步暂未实现，计划在本地流程验证稳定后作为第二阶段功能加入。
 
@@ -44,20 +44,26 @@ python3 ~/.codex/skills/echoscript/scripts/media_ingest.py doctor
 python3 ~/.codex/skills/echoscript/scripts/local_asr.py doctor
 ```
 
+### 其他 Agent 或任意路径使用
+
+`~/.codex/skills/echoscript` 是 Codex 的推荐安装位置，不是脚本的硬编码依赖。也可以把仓库 clone 到任意目录，让支持 `SKILL.md` 工作流的 Agent 读取该文件，并使用脚本的绝对路径执行命令。不同 Agent 是否支持 `$echoscript` 自动触发，取决于各自的 Skill 发现机制。
+
 ### 使用示例
 
 在 Codex 中输入：
 
 ```text
 用 $echoscript 处理这个 YouTube 链接。校对文稿，如果是英文就翻译成中文，
-生成快速摘要、详细总结和灵感选题，最后导出 Markdown、Word 和 PDF。
+生成快速摘要、详细总结和灵感选题，最后只导出 Word。
 ```
 
 也可以提供本地文件：
 
 ```text
-用 $echoscript 处理 /absolute/path/to/podcast.mp3，并输出中文文稿和三种文档格式。
+用 $echoscript 处理 /absolute/path/to/podcast.mp3，并输出中文文稿和 PDF。
 ```
+
+如果没有指定格式，Skill 会先询问需要 Markdown、Word、PDF 中的哪一种或多种，不会默认生成三份重复内容。
 
 ### 本地 ASR 规则
 
@@ -68,6 +74,8 @@ EchoScript 不会在转写时静默下载模型：
 3. 如果只有模型、没有运行环境，只提示安装运行环境，不重复下载模型。
 4. 如果没有任何本地 ASR 模型，优先提供 FunASR `iic/SenseVoiceSmall` 下载选项。
 5. 下载模型前必须先获得用户许可。
+
+如果本机只有 `whisper-tiny`，检测结果会将它标记为 `smoke-test-only`。它不会被静默用于正式长音频；用户必须明确接受质量风险并传入 `--allow-low-quality-model`，否则应升级到 FunASR SenseVoiceSmall 或已缓存的 whisper-small。
 
 检测命令：
 
@@ -97,15 +105,17 @@ python3 scripts/local_asr.py transcribe "/absolute/path/to/job" \
 
 ### 导出文档
 
-三种格式由同一份 Markdown 内容生成：
+先确定需要的格式，再传给 `--formats`。该参数是必填项，可以是 `md`、`docx`、`pdf` 或逗号分隔的组合；下面只生成 Word：
 
 ```bash
 python3 scripts/document_export.py export document.md \
   --output-dir exports \
-  --formats md,docx,pdf
+  --formats docx
 
 python3 scripts/document_export.py validate exports
 ```
+
+`document.md` 是内部统一内容源。只有用户选择 Markdown 时，才把 Markdown 作为最终交付文档复制到导出目录。导出器也会拒绝仍含模板占位符的内容。
 
 在 Codex 之外单独运行文档导出器时，可能需要安装：
 
@@ -140,7 +150,7 @@ The end-to-end workflow:
 2. Detects and uses a local ASR model when no transcript is available.
 3. Uses the current Codex Agent for proofreading, English-to-Chinese translation, and content synthesis.
 4. Produces separate quick summary, detailed summary, and topic-idea sections.
-5. Exports Markdown, Word DOCX, and PDF documents.
+5. Exports only the Markdown, Word DOCX, or PDF formats selected by the user.
 
 Proofreading, translation, and summarization do not call an external LLM API. Notion and Feishu sync are intentionally deferred until the local workflow has been validated.
 
@@ -161,20 +171,26 @@ python3 ~/.codex/skills/echoscript/scripts/media_ingest.py doctor
 python3 ~/.codex/skills/echoscript/scripts/local_asr.py doctor
 ```
 
+### Other agents and custom locations
+
+`~/.codex/skills/echoscript` is the recommended Codex location, not a hard-coded script dependency. The repository can be cloned anywhere. An agent that supports `SKILL.md` workflows can read the file and run scripts by absolute path. Whether `$echoscript` is discovered automatically depends on that agent's own Skill mechanism.
+
 ### Example prompts
 
 ```text
 Use $echoscript to process this YouTube URL. Proofread the transcript, translate English
 into Chinese, create a quick summary, detailed summary, and topic ideas, then export
-Markdown, Word, and PDF files.
+only a Word document.
 ```
 
 For a local file:
 
 ```text
 Use $echoscript to process /absolute/path/to/podcast.mp3 and export a Chinese transcript
-in Markdown, Word, and PDF formats.
+as PDF.
 ```
+
+If no format is specified, the Skill asks which of Markdown, Word, and PDF is needed instead of generating all three by default.
 
 ### Local ASR policy
 
@@ -185,6 +201,8 @@ EchoScript never downloads model weights silently during transcription:
 3. If model files exist but the runtime is missing, only runtime installation is suggested.
 4. If no local ASR model exists, FunASR `iic/SenseVoiceSmall` is the preferred download.
 5. Model downloads require explicit user approval.
+
+If only `whisper-tiny` is available, the detector marks it as `smoke-test-only`. It is not silently used for production-length audio: the user must explicitly accept the quality risk and pass `--allow-low-quality-model`, or upgrade to FunASR SenseVoiceSmall or a cached whisper-small model.
 
 Inspect the current state:
 
@@ -214,15 +232,17 @@ python3 scripts/local_asr.py transcribe "/absolute/path/to/job" \
 
 ### Document export
 
-All formats are generated from the same canonical Markdown document:
+Choose the deliverable first and pass it to the required `--formats` argument. Accepted values are `md`, `docx`, `pdf`, or a comma-separated combination. This example generates Word only:
 
 ```bash
 python3 scripts/document_export.py export document.md \
   --output-dir exports \
-  --formats md,docx,pdf
+  --formats docx
 
 python3 scripts/document_export.py validate exports
 ```
+
+`document.md` remains the internal canonical source. Markdown is copied into the export directory only when the user selects it as a deliverable. The exporter also rejects unresolved template placeholders.
 
 When running outside the bundled Codex environment, document export may require:
 

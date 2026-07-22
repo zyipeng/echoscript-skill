@@ -167,6 +167,24 @@ def mlx_model_is_cached(model: str) -> bool:
     )
 
 
+def model_quality(backend: str | None, model: str | None) -> dict[str, Any]:
+    if backend == "funasr":
+        return {"tier": "preferred", "requires_confirmation": False, "warning": None}
+    if model == MLX_TINY_MODEL:
+        return {
+            "tier": "smoke-test-only",
+            "requires_confirmation": True,
+            "warning": (
+                "当前仅检测到 whisper-tiny。它适合快速冒烟测试，但不适合直接生成长中文音频的正式文稿，"
+                "容易出现同音字、专有名词和语义断裂问题。建议下载 FunASR SenseVoiceSmall 或缓存 whisper-small；"
+                "只有用户明确接受质量风险时才使用 tiny。"
+            ),
+        }
+    if backend == "mlx-whisper" and model:
+        return {"tier": "standard", "requires_confirmation": False, "warning": None}
+    return {"tier": "unavailable", "requires_confirmation": False, "warning": None}
+
+
 def local_asr_state(cache_dir: Path) -> dict[str, Any]:
     funasr_python = resolve_asr_python(cache_dir, "funasr")
     funasr_model = find_funasr_model(FUNASR_MODEL, cache_dir, "ECHOSCRIPT_FUNASR_MODEL")
@@ -184,8 +202,12 @@ def local_asr_state(cache_dir: Path) -> dict[str, Any]:
     selected_backend = "funasr" if funasr_ready else "mlx-whisper" if mlx_ready else None
     selected_model = FUNASR_MODEL if funasr_ready else mlx_model if mlx_ready else None
     local_model_available = bool(funasr_model or mlx_model)
+    quality = model_quality(selected_backend, selected_model)
 
-    if selected_backend:
+    if selected_backend and quality["requires_confirmation"]:
+        recommended_action = "confirm_low_quality_or_offer_upgrade"
+        setup_command = f"python3 {Path(__file__).resolve()} setup --backend funasr"
+    elif selected_backend:
         recommended_action = "none"
         setup_command = None
     elif funasr_model and funasr_vad:
@@ -208,6 +230,10 @@ def local_asr_state(cache_dir: Path) -> dict[str, Any]:
         "ready": bool(selected_backend),
         "selected_backend": selected_backend,
         "selected_model": selected_model,
+        "preferred_model": FUNASR_MODEL,
+        "quality_tier": quality["tier"],
+        "quality_warning": quality["warning"],
+        "requires_quality_confirmation": quality["requires_confirmation"],
         "local_model_available": local_model_available,
         "recommended_action": recommended_action,
         "setup_command": setup_command,
@@ -227,6 +253,7 @@ def local_asr_state(cache_dir: Path) -> dict[str, Any]:
             "python": str(mlx_python) if mlx_python else None,
             "preferred_model": MLX_DEFAULT_MODEL,
             "cached_model": mlx_model,
+            "quality_tier": model_quality("mlx-whisper", mlx_model)["tier"],
         },
         "preferred_download": {
             "backend": "funasr",
@@ -386,6 +413,11 @@ def resolve_audio(value: str) -> tuple[Path, Path | None]:
 def setup_message(state: dict[str, Any]) -> str:
     action = state["recommended_action"]
     command = state.get("setup_command")
+    if action == "confirm_low_quality_or_offer_upgrade":
+        return (
+            f"{state['quality_warning']} 获得模型下载许可后可运行：{command}。"
+            "若用户明确接受测试级质量，可在转写命令中加入 --allow-low-quality-model。"
+        )
     if action == "offer_funasr_download":
         return (
             "本地未检测到可用 ASR 模型。先向用户说明将下载 FunASR SenseVoiceSmall "
@@ -420,15 +452,33 @@ def select_backend(args: argparse.Namespace, cache_dir: Path) -> tuple[str, str,
         return "funasr", model_id, python
     model = args.model or state["mlx_whisper"]["cached_model"] or MLX_DEFAULT_MODEL
     python = resolve_asr_python(cache_dir, "mlx")
-    if not python or not mlx_model_is_cached(model):
+    if not python:
         raise AsrError(setup_message(state))
+    if not mlx_model_is_cached(model):
+        raise AsrError(
+            f"本地尚未缓存 {model}。获得许可后运行：python3 {Path(__file__).resolve()} "
+            f"setup --backend mlx --model {model}"
+        )
+    if model == MLX_TINY_MODEL and not args.allow_low_quality_model:
+        raise AsrError(setup_message({
+            **state,
+            "recommended_action": "confirm_low_quality_or_offer_upgrade",
+            "quality_warning": model_quality("mlx-whisper", model)["warning"],
+            "setup_command": f"python3 {Path(__file__).resolve()} setup --backend funasr",
+        }))
     return "mlx", model, python
 
 
 def transcribe(args: argparse.Namespace) -> None:
     cache_dir = Path(args.cache_dir).expanduser().resolve()
-    backend, model, python = select_backend(args, cache_dir)
     audio, source_manifest = resolve_audio(args.input)
+    backend, model, python = select_backend(args, cache_dir)
+    effective_language = args.language
+    if effective_language == "auto" and source_manifest:
+        source_payload = json.loads(source_manifest.read_text(encoding="utf-8"))
+        manifest_language = str(source_payload.get("language") or "unknown").lower()
+        if manifest_language in {"zh", "en", "yue", "ja", "ko"}:
+            effective_language = manifest_language
     output = Path(args.output).expanduser().resolve()
     worker = [str(python), str(Path(__file__).resolve())]
     if backend == "funasr":
@@ -444,21 +494,34 @@ def transcribe(args: argparse.Namespace) -> None:
     else:
         worker.extend(["_mlx_worker", str(audio), str(output), "--model", model])
         transcript_origin = "local-mlx-whisper"
-    if args.language and args.language != "auto":
-        worker.extend(["--language", args.language])
-    result = subprocess.run(worker)
+    if effective_language and effective_language != "auto":
+        worker.extend(["--language", effective_language])
+    worker_environment = os.environ.copy()
+    worker_environment.update({
+        "HF_HUB_DISABLE_PROGRESS_BARS": "1",
+        "TQDM_DISABLE": "1",
+    })
+    result = subprocess.run(worker, env=worker_environment)
     if result.returncode != 0:
         raise AsrError(f"本地 {backend} 转写失败")
     if source_manifest:
         payload = json.loads(source_manifest.read_text(encoding="utf-8"))
         payload["transcript_path"] = str(output)
         payload["transcript_origin"] = transcript_origin
+        payload["transcript_model"] = model
+        payload["transcript_quality_tier"] = model_quality(
+            "funasr" if backend == "funasr" else "mlx-whisper", model
+        )["tier"]
         write_json(source_manifest, payload)
     print(json.dumps({
         "ok": True,
         "backend": backend,
         "transcript_path": str(output),
         "model": model,
+        "quality_tier": model_quality(
+            "funasr" if backend == "funasr" else "mlx-whisper", model
+        )["tier"],
+        "language_hint": effective_language,
     }, ensure_ascii=False, indent=2))
 
 
@@ -533,6 +596,7 @@ def funasr_worker(args: argparse.Namespace) -> None:
         "transcript_kind": "local-funasr-sensevoice",
         "source": str(Path(args.input).resolve()),
         "model": args.model_id,
+        "quality_tier": "preferred",
         "segment_count": len(segments),
         "segments": segments,
         "text": "\n".join(item["text"] for item in segments),
@@ -541,6 +605,8 @@ def funasr_worker(args: argparse.Namespace) -> None:
 
 
 def mlx_worker(args: argparse.Namespace) -> None:
+    os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+    os.environ.setdefault("TQDM_DISABLE", "1")
     try:
         import mlx_whisper
     except ImportError as error:
@@ -550,6 +616,7 @@ def mlx_worker(args: argparse.Namespace) -> None:
         "task": "transcribe",
         "word_timestamps": False,
         "condition_on_previous_text": True,
+        "verbose": None,
     }
     if args.language:
         options["language"] = args.language
@@ -576,6 +643,7 @@ def mlx_worker(args: argparse.Namespace) -> None:
         "transcript_kind": "local-mlx-whisper",
         "source": str(Path(args.input).resolve()),
         "model": args.model,
+        "quality_tier": model_quality("mlx-whisper", args.model)["tier"],
         "segment_count": len(segments),
         "segments": segments,
         "text": "\n".join(item["text"] for item in segments),
@@ -606,6 +674,11 @@ def build_parser() -> argparse.ArgumentParser:
     transcribe_parser.add_argument("--model")
     transcribe_parser.add_argument("--language", default="auto")
     transcribe_parser.add_argument("--cache-dir", default=str(DEFAULT_CACHE_DIR))
+    transcribe_parser.add_argument(
+        "--allow-low-quality-model",
+        action="store_true",
+        help="Allow a smoke-test-only model such as whisper-tiny after explicit user acceptance",
+    )
     transcribe_parser.set_defaults(handler=transcribe)
 
     download_parser = subparsers.add_parser("_download_funasr")

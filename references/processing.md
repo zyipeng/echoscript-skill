@@ -1,6 +1,6 @@
 # Agent text-processing protocol
 
-Use this protocol after `transcript.raw.json` exists. Translation, proofreading, and summaries must be produced by the current Agent, not an external model endpoint.
+Use this protocol after `transcript.raw.json` exists. Produce translation, proofreading, and summaries directly with the current Agent's language ability, not by calling another model through curl, HTTP, an SDK, or an external model endpoint.
 
 ## Evidence rules
 
@@ -11,18 +11,25 @@ Use this protocol after `transcript.raw.json` exists. Translation, proofreading,
 - Keep meaningful hesitations or repetitions when they affect intent; remove only obvious ASR noise.
 - Do not turn opinions into facts or strengthen claims beyond the transcript.
 - Preserve quotations only when the wording is supported by the transcript.
+- Treat source descriptions and show notes as spelling and topic hints, not as a replacement transcript.
+
+## Quality gate
+
+- Read `model` and `quality_tier` before processing.
+- Stop for user confirmation when `quality_tier` is `smoke-test-only`; recommend a stronger local model first.
+- If the user accepts a smoke-test-only result, make conservative corrections and mark unclear spans. Never reverse-engineer missing speech from show notes.
 
 ## Chunk workflow
 
-For each file in `chunks/index.json` order:
+Use `chunks/index.json` as the coverage source. For each file in order:
 
 1. Read the complete chunk.
 2. Produce a proofread chunk with the same time coverage.
 3. If English, produce a Chinese translation from the proofread chunk.
-4. Record chunk-level key points, named entities, unclear spans, and candidate quotes.
-5. Mark the chunk complete in a ledger before moving on.
+4. Record 3-7 key points plus only the name corrections or unclear spans that actually matter.
+5. Record the processed filename and start/end timestamps in a compact checklist.
 
-After all chunks are complete, synthesize the final document from every ledger entry and the processed chunks. Resolve repeated points across chunk boundaries, but do not drop unique evidence.
+Before synthesis, verify that checklist count equals `chunk_count` and that the first and last time ranges are covered. Then synthesize from all processed chunks, resolving repeated points across boundaries without dropping unique evidence. Do not depend on unaided memory of large chunks.
 
 ## Proofreading
 
@@ -81,5 +88,4 @@ Build `document.md` in this order:
 6. Chinese translation, only when the source was English.
 7. Processing note listing subtitle/ASR origin and any limitations.
 
-Use the asset template as a starting point and remove all unused placeholders.
-
+Use the asset template as a starting point and remove all unused sections and placeholders. The exporter will reject any remaining `{{...}}` token.

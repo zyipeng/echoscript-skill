@@ -14,6 +14,14 @@ class ChunkError(RuntimeError):
     pass
 
 
+CJK_LANGUAGES = {"zh", "zh-cn", "zh-tw", "yue", "ja", "ko"}
+
+
+def default_max_chars(language: str) -> int:
+    normalized = str(language or "unknown").lower().replace("_", "-")
+    return 8000 if normalized in CJK_LANGUAGES or normalized.startswith("zh-") else 12000
+
+
 def format_timestamp(milliseconds: Any) -> str:
     total = max(0, int(float(milliseconds or 0) // 1000))
     hours, remainder = divmod(total, 3600)
@@ -52,17 +60,23 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Split normalized transcript JSON into Markdown chunks")
     parser.add_argument("transcript")
     parser.add_argument("--output-dir", required=True)
-    parser.add_argument("--max-chars", type=int, default=24000)
+    parser.add_argument(
+        "--max-chars",
+        type=int,
+        help="Maximum characters per chunk; defaults to 8000 for CJK and 12000 otherwise",
+    )
     args = parser.parse_args()
     try:
-        if args.max_chars < 2000:
-            raise ChunkError("--max-chars 不能小于 2000")
         source = Path(args.transcript).expanduser().resolve()
         payload = json.loads(source.read_text(encoding="utf-8"))
+        language = str(payload.get("language") or "unknown")
+        max_chars = args.max_chars if args.max_chars is not None else default_max_chars(language)
+        if max_chars < 2000:
+            raise ChunkError("--max-chars 不能小于 2000")
         segments = payload.get("segments")
         if not isinstance(segments, list) or not segments:
             raise ChunkError("transcript JSON 没有可用 segments")
-        chunks = chunk_segments(segments, args.max_chars)
+        chunks = chunk_segments(segments, max_chars)
         if not chunks:
             raise ChunkError("文字稿没有可分块内容")
         output_dir = Path(args.output_dir).expanduser().resolve()
@@ -85,12 +99,19 @@ def main() -> int:
         index_payload = {
             "schema_version": 1,
             "source": str(source),
-            "language": payload.get("language") or "unknown",
+            "language": language,
+            "max_chars": max_chars,
             "chunk_count": len(index),
             "chunks": index,
         }
         (output_dir / "index.json").write_text(json.dumps(index_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        print(json.dumps({"ok": True, "chunk_count": len(index), "index": str(output_dir / 'index.json')}, ensure_ascii=False, indent=2))
+        print(json.dumps({
+            "ok": True,
+            "language": language,
+            "max_chars": max_chars,
+            "chunk_count": len(index),
+            "index": str(output_dir / "index.json"),
+        }, ensure_ascii=False, indent=2))
         return 0
     except (OSError, json.JSONDecodeError, ChunkError) as error:
         print(json.dumps({"ok": False, "error": str(error)}, ensure_ascii=False), file=sys.stderr)
@@ -99,4 +120,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

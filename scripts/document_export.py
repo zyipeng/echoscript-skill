@@ -473,10 +473,19 @@ def create_pdf(markdown: str, destination: Path, title_override: str | None = No
 
 def parse_formats(value: str) -> list[str]:
     formats = list(dict.fromkeys(item.strip().lower() for item in value.split(",") if item.strip()))
+    if not formats:
+        raise ExportError("至少选择一种导出格式：md、docx 或 pdf")
     invalid = [item for item in formats if item not in {"md", "docx", "pdf"}]
     if invalid:
         raise ExportError(f"不支持的格式：{', '.join(invalid)}")
     return formats
+
+
+def reject_placeholders(text: str, source: Path) -> None:
+    placeholders = sorted(set(re.findall(r"{{[^{}]+}}", text)))
+    if placeholders:
+        preview = "、".join(placeholders[:5])
+        raise ExportError(f"文档仍包含未替换占位符：{preview}（{source}）")
 
 
 def export(args: argparse.Namespace) -> None:
@@ -486,6 +495,7 @@ def export(args: argparse.Namespace) -> None:
     markdown = source.read_text(encoding="utf-8-sig")
     if len(markdown.strip()) < 20:
         raise ExportError("Markdown 内容过短，拒绝导出空文档")
+    reject_placeholders(markdown, source)
     output_dir = Path(args.output_dir).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     formats = parse_formats(args.formats)
@@ -514,21 +524,28 @@ def validate_path(path: Path) -> dict[str, Any]:
     suffix = path.suffix.lower()
     result: dict[str, Any] = {"path": str(path), "size": path.stat().st_size, "valid": True}
     if suffix == ".md":
-        result["characters"] = len(path.read_text(encoding="utf-8-sig"))
+        text = path.read_text(encoding="utf-8-sig")
+        reject_placeholders(text, path)
+        result["characters"] = len(text)
     elif suffix == ".docx":
         from docx import Document
         document = Document(path)
-        text = "\n".join(paragraph.text for paragraph in document.paragraphs).strip()
+        parts = [paragraph.text for paragraph in document.paragraphs]
+        parts.extend(cell.text for table in document.tables for row in table.rows for cell in row.cells)
+        text = "\n".join(parts).strip()
         if not text:
             raise ExportError(f"DOCX 没有可读正文：{path}")
+        reject_placeholders(text, path)
         result.update({"paragraphs": len(document.paragraphs), "tables": len(document.tables), "characters": len(text)})
     elif suffix == ".pdf":
         from pypdf import PdfReader
         reader = PdfReader(str(path))
         if not reader.pages:
             raise ExportError(f"PDF 没有页面：{path}")
+        extracted = "\n".join(page.extract_text() or "" for page in reader.pages)
+        reject_placeholders(extracted, path)
         result["pages"] = len(reader.pages)
-        result["extracted_characters"] = sum(len(page.extract_text() or "") for page in reader.pages)
+        result["extracted_characters"] = len(extracted)
     return result
 
 
@@ -550,7 +567,7 @@ def build_parser() -> argparse.ArgumentParser:
     export_parser = subparsers.add_parser("export")
     export_parser.add_argument("markdown")
     export_parser.add_argument("--output-dir", required=True)
-    export_parser.add_argument("--formats", default="md,docx,pdf")
+    export_parser.add_argument("--formats", required=True, help="Comma-separated selection: md, docx, pdf")
     export_parser.add_argument("--name")
     export_parser.add_argument("--title")
     export_parser.set_defaults(handler=export)
