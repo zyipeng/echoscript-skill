@@ -1,6 +1,6 @@
 ---
 name: echoscript
-description: Turn YouTube, Bilibili, Xiaoyuzhou podcast links, local audio/video, or subtitle files into timestamped transcripts and polished Chinese content. Use when Codex needs to acquire subtitles or audio, detect and use local FunASR or MLX speech models without an external model API, translate English transcripts into Chinese, proofread transcripts, create quick summaries/detailed summaries/topic ideas, or export only the selected Markdown, Word DOCX, or PDF deliverables.
+description: Turn YouTube, Bilibili, Xiaoyuzhou podcast links, local audio/video, or subtitle files into timestamped transcripts and polished Chinese content. Use when an AI coding agent needs to acquire subtitles or audio, detect and use local FunASR or MLX speech models without an external model API, translate English transcripts into Chinese, proofread transcripts, create quick summaries/detailed summaries/topic ideas, or export only the selected Markdown, Word DOCX, or PDF deliverables.
 ---
 
 # EchoScript
@@ -16,6 +16,8 @@ Run a local-first media-to-document workflow. Use the bundled scripts for acquis
 - Detect local ASR files before suggesting a download. Offer FunASR SenseVoiceSmall first only when no suitable local model exists, and request approval before setup.
 - Do not upload to Notion, Feishu, or another cloud destination in this phase.
 - Never borrow browser cookies or a signed-in session without explicit permission for that source.
+
+Resolve the directory containing this `SKILL.md` as the Skill directory. Run bundled scripts from that directory or use their absolute paths; never assume the current project is the Skill directory.
 
 ## 1. Resolve content and export scope
 

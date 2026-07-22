@@ -1,142 +1,162 @@
-# EchoScript Skill
+# EchoScript
 
-[中文](#中文) · [English](#english)
+[简体中文](#简体中文) · [English](#english)
 
-EchoScript is a local-first Codex Skill that turns media links or local audio into polished transcripts, Chinese translations, summaries, and shareable documents.
+中文快速入口：[Claude Code 安装](#安装到-claude-code) · [Codex 安装](#安装到-codex) · [其他 Agent](#在其他-agent-中使用) · [常见问题](#常见问题)
+
+English quick links: [Claude Code](#claude-code-installation) · [Codex](#codex-installation) · [Other agents](#other-agents-and-custom-locations) · [Troubleshooting](#troubleshooting)
+
+EchoScript 是一个兼容 Agent Skills / `SKILL.md` 工作流的本地优先媒体整理工具。它可以从 YouTube、哔哩哔哩、小宇宙或本地音视频中获取字幕或音频，生成校对文字稿、英文到中文翻译、内容总结，并按需导出 Markdown、Word 或 PDF。
+
+它不把 Codex 当作唯一运行环境：Claude Code、Codex，以及能够读取 `SKILL.md` 并执行本地脚本的其他 Agent 都可以使用。
 
 ---
 
-## 中文
+## 简体中文
 
-### 功能
+### 你可以用它做什么
 
-EchoScript 可以处理：
+支持的输入：
 
 - YouTube 视频链接
 - 哔哩哔哩视频链接
 - 小宇宙播客链接
-- 本地音频、视频、字幕或文字稿文件
+- 本地音频或视频
+- 本地 SRT、VTT、纯文本等字幕或文字稿
 
-完整工作流包括：
+支持的处理能力：
 
-1. 获取平台已有字幕或公开音频。
-2. 没有字幕时，检测并调用本地 ASR 模型转写。
-3. 由当前 Codex Agent 完成文字稿校对、英文翻译成中文和内容总结。
-4. 分别生成 `快速摘要`、`详细总结` 和 `灵感选题`。
-5. 只导出用户选择的 Markdown、Word DOCX 或 PDF 格式。
+- 优先获取平台已有字幕
+- 没有字幕时使用本地 FunASR 或 MLX Whisper 转写
+- 校对错别字、断句、标点和明显的 ASR 错误
+- 将英文文字稿翻译成自然中文
+- 分别生成 `快速摘要`、`详细总结`、`灵感选题`
+- 只导出你选择的 Markdown、Word DOCX、PDF 格式
 
-翻译、校对和总结不接入外部 LLM API。Notion 和飞书同步暂未实现，计划在本地流程验证稳定后作为第二阶段功能加入。
+翻译、校对和总结由当前 Agent 自身完成，EchoScript 不再额外接入另一套 LLM API。Notion 和飞书同步属于后续阶段，当前版本只生成本地文件。
 
-### 安装
+### 先选一种安装方式
 
-需要 Python 3、FFmpeg、FFprobe、curl 和 yt-dlp。安装到 Codex Skills 目录：
+| 使用环境 | 推荐安装位置 | 调用方式 | 适用范围 |
+| --- | --- | --- | --- |
+| Claude Code 个人 Skill | `~/.claude/skills/echoscript` | `/echoscript` 或自然语言 | 所有 Claude Code 项目 |
+| Claude Code 项目 Skill | `<项目>/.claude/skills/echoscript` | `/echoscript` 或自然语言 | 当前项目及其子目录 |
+| Codex 个人 Skill | `~/.codex/skills/echoscript` | `$echoscript` 或自然语言 | 所有 Codex 任务 |
+| 其他 Agent | 任意目录 | 让 Agent 读取该目录的 `SKILL.md` | 取决于该 Agent 的 Skill 机制 |
+
+安装位置只是 Agent 的发现入口，EchoScript 脚本本身没有硬编码 Codex 路径。
+
+### 系统要求
+
+建议环境：
+
+- macOS 或 Linux
+- Windows 用户建议使用 WSL2；原生 Windows 尚未作为主要测试环境
+- Python 3.10 或更高版本
+- Git
+- FFmpeg 和 FFprobe
+- curl
+- yt-dlp
+
+macOS（Homebrew）：
 
 ```bash
+brew install python ffmpeg curl yt-dlp git
+```
+
+Ubuntu / Debian / WSL：
+
+```bash
+sudo apt update
+sudo apt install python3 python3-pip ffmpeg curl git
+python3 -m pip install --upgrade yt-dlp
+```
+
+Word 和 PDF 导出如果缺少 Python 依赖，再安装：
+
+```bash
+python3 -m pip install python-docx reportlab pypdf
+```
+
+### 安装到 Claude Code
+
+#### 个人安装：所有项目可用
+
+```bash
+mkdir -p ~/.claude/skills
+git clone https://github.com/zyipeng/echoscript-skill.git ~/.claude/skills/echoscript
+```
+
+然后在 Claude Code 中输入：
+
+```text
+/echoscript 处理这个小宇宙链接，生成摘要版，只导出 Markdown：<链接>
+```
+
+也可以不写命令名，直接描述需求。Claude Code 会根据 `SKILL.md` 的 description 自动判断是否调用 EchoScript：
+
+```text
+请处理这个英文 YouTube 视频，校对全文、翻译成中文并导出 Word：<链接>
+```
+
+#### 项目安装：只在当前仓库使用
+
+如果项目已经使用 Git，并且希望团队成员获得同一版本，推荐在项目根目录添加 submodule：
+
+```bash
+mkdir -p .claude/skills
+git submodule add https://github.com/zyipeng/echoscript-skill.git .claude/skills/echoscript
+```
+
+如果只是本机临时使用、不准备把 Skill 提交到当前项目，也可以把仓库直接 clone 到同一路径。
+
+Claude Code 官方支持从 `.claude/skills/` 自动发现项目 Skill。若当前会话启动时还不存在顶层 Skill 目录，创建后没有立即出现 `/echoscript`，请重新启动一次 Claude Code。详见 [Claude Code Skills 官方文档](https://code.claude.com/docs/en/skills)。
+
+### 安装到 Codex
+
+```bash
+mkdir -p ~/.codex/skills
 git clone https://github.com/zyipeng/echoscript-skill.git ~/.codex/skills/echoscript
 ```
 
-安装后新建一个 Codex 任务，使用 `$echoscript` 调用。
-
-如果只需要检查本机依赖：
-
-```bash
-python3 ~/.codex/skills/echoscript/scripts/media_ingest.py doctor
-python3 ~/.codex/skills/echoscript/scripts/local_asr.py doctor
-```
-
-### 其他 Agent 或任意路径使用
-
-`~/.codex/skills/echoscript` 是 Codex 的推荐安装位置，不是脚本的硬编码依赖。也可以把仓库 clone 到任意目录，让支持 `SKILL.md` 工作流的 Agent 读取该文件，并使用脚本的绝对路径执行命令。不同 Agent 是否支持 `$echoscript` 自动触发，取决于各自的 Skill 发现机制。
-
-### 使用示例
-
-在 Codex 中输入：
+建议安装后新建一个 Codex 任务，然后输入：
 
 ```text
-用 $echoscript 处理这个 YouTube 链接。校对文稿，如果是英文就翻译成中文，
-生成快速摘要、详细总结和灵感选题，最后只导出 Word。
+用 $echoscript 处理这个哔哩哔哩链接，生成完整版，最后只导出 PDF：<链接>
 ```
 
-也可以提供本地文件：
+也可以使用自然语言描述任务；`$echoscript` 是 Codex 的显式调用方式，不是 EchoScript 脚本本身的必需参数。
 
-```text
-用 $echoscript 处理 /absolute/path/to/podcast.mp3，并输出中文文稿和 PDF。
-```
+### 在其他 Agent 中使用
 
-如果没有指定内容范围或格式，Skill 会用一个简短问题同时确认：
-
-- `摘要版`：快速摘要、详细总结和灵感选题，不附完整文稿。
-- `完整版`：以上三部分，加完整校对文稿；英文源再附中文翻译。
-
-Skill 只生成用户选择的 Markdown、Word、PDF 格式，不会默认生成三份重复内容。
-
-### Token 优化与质量边界
-
-- 正常运行只执行文档中的命令，不读取 README 或 Python 源码；只有命令失败且诊断不足时才检查相关脚本。
-- 分块脚本默认合并同一说话人、间隔不超过 2 秒且总跨度不超过 30 秒的碎片，减少重复时间戳并改善上下文。用 `--no-merge` 可保留原始分段。
-- 摘要版可用带时间戳的 show notes 定位证据，但 show notes 不能替代文字稿；提纲稀疏时仍需覆盖全部分块。
-- 完整版必须处理每一个分块。最终汇总使用逐块保存的精简证据笔记，避免再次读取整份原始文稿。
-- 完整文字稿只删除确定的 ASR 噪音或意外重复，不会因为观点已出现在总结中就删掉有意义的原话。
-
-### 本地 ASR 规则
-
-EchoScript 不会在转写时静默下载模型：
-
-1. 先检查本机已有的 FunASR 和 MLX 模型。
-2. 如果已有可用模型，直接复用。
-3. 如果只有模型、没有运行环境，只提示安装运行环境，不重复下载模型。
-4. 如果没有任何本地 ASR 模型，优先提供 FunASR `iic/SenseVoiceSmall` 下载选项。
-5. 下载模型前必须先获得用户许可。
-
-如果本机只有 `whisper-tiny`，检测结果会将它标记为 `smoke-test-only`。它不会被静默用于正式长音频；用户必须明确接受质量风险并传入 `--allow-low-quality-model`，否则应升级到 FunASR SenseVoiceSmall 或已缓存的 whisper-small。
-
-检测命令：
+将仓库克隆到任意位置：
 
 ```bash
+git clone https://github.com/zyipeng/echoscript-skill.git /path/to/echoscript
+```
+
+如果 Agent 支持 Agent Skills 标准，把整个目录放入该 Agent 的 Skills 目录。如果不支持自动发现，可以直接告诉它：
+
+```text
+请完整读取 /path/to/echoscript/SKILL.md，并严格按照其中工作流处理这个媒体：<链接或本地文件>。
+需要完整版，英文翻译成中文，最后只导出 DOCX。
+```
+
+不要只复制 `SKILL.md`：`scripts/`、`references/` 和 `assets/` 都是工作流的一部分。
+
+### 第一次运行
+
+进入实际安装目录。下面用 `/path/to/echoscript` 表示该目录：
+
+```bash
+cd /path/to/echoscript
+python3 scripts/media_ingest.py doctor
 python3 scripts/local_asr.py doctor
 ```
 
-获得下载许可后，安装首选 FunASR 后端：
+第一条命令检查媒体获取依赖；第二条命令只检测本地 ASR 环境和模型，不会自动下载模型。
 
-```bash
-python3 scripts/local_asr.py setup --backend funasr
-```
-
-转写命令会自动选择已经就绪的本地后端：
-
-```bash
-python3 scripts/local_asr.py transcribe "/absolute/path/to/job" \
-  --output "/absolute/path/to/job/transcript.raw.json"
-```
-
-### 平台说明
-
-- YouTube：优先获取公开字幕，访问可能受到平台登录或反自动化策略限制。
-- 哔哩哔哩：使用公开接口获取元数据、字幕和音频，不把 yt-dlp 作为 B 站默认路径。
-- 小宇宙：解析公开节目页面和音频地址，通常需要本地 ASR。
-- 浏览器登录态：只有得到用户对当前来源的明确许可后才能使用。
-
-### 导出文档
-
-先确定需要的格式，再传给 `--formats`。该参数是必填项，可以是 `md`、`docx`、`pdf` 或逗号分隔的组合；下面只生成 Word：
-
-```bash
-python3 scripts/document_export.py export document.md \
-  --output-dir exports \
-  --formats docx
-
-python3 scripts/document_export.py validate exports
-```
-
-`document.md` 是内部统一内容源。只有用户选择 Markdown 时，才把 Markdown 作为最终交付文档复制到导出目录。导出器也会拒绝仍含模板占位符的内容。
-
-在 Codex 之外单独运行文档导出器时，可能需要安装：
-
-```bash
-pip install python-docx reportlab pypdf
-```
-
-### 本地自检
+如果你只想快速确认整个本地工作流：
 
 ```bash
 python3 scripts/self_test.py --output-dir /tmp/echoscript-self-test
@@ -144,142 +164,363 @@ python3 scripts/self_test.py --output-dir /tmp/echoscript-self-test
 
 自检覆盖本地媒体接入、ASR 模型检测、保留说话人边界的碎片合并与分块，以及 Markdown、DOCX、PDF 导出。
 
----
+### 推荐提问方式
 
-## English
+最好一次说清三件事：输入来源、内容范围、导出格式。
 
-### What it does
-
-EchoScript accepts:
-
-- YouTube video URLs
-- Bilibili video URLs
-- Xiaoyuzhou podcast URLs
-- Local audio, video, subtitle, or transcript files
-
-The end-to-end workflow:
-
-1. Acquires available platform subtitles or public audio.
-2. Detects and uses a local ASR model when no transcript is available.
-3. Uses the current Codex Agent for proofreading, English-to-Chinese translation, and content synthesis.
-4. Produces separate quick summary, detailed summary, and topic-idea sections.
-5. Exports only the Markdown, Word DOCX, or PDF formats selected by the user.
-
-Proofreading, translation, and summarization do not call an external LLM API. Notion and Feishu sync are intentionally deferred until the local workflow has been validated.
-
-### Installation
-
-Python 3, FFmpeg, FFprobe, curl, and yt-dlp are required. Clone the repository into the Codex Skills directory:
-
-```bash
-git clone https://github.com/zyipeng/echoscript-skill.git ~/.codex/skills/echoscript
-```
-
-Start a new Codex task after installation and invoke the Skill with `$echoscript`.
-
-Check local dependencies with:
-
-```bash
-python3 ~/.codex/skills/echoscript/scripts/media_ingest.py doctor
-python3 ~/.codex/skills/echoscript/scripts/local_asr.py doctor
-```
-
-### Other agents and custom locations
-
-`~/.codex/skills/echoscript` is the recommended Codex location, not a hard-coded script dependency. The repository can be cloned anywhere. An agent that supports `SKILL.md` workflows can read the file and run scripts by absolute path. Whether `$echoscript` is discovered automatically depends on that agent's own Skill mechanism.
-
-### Example prompts
+完整版示例：
 
 ```text
-Use $echoscript to process this YouTube URL. Proofread the transcript, translate English
-into Chinese, create a quick summary, detailed summary, and topic ideas, then export
-only a Word document.
+处理这个英文 YouTube 链接。校对完整文稿并翻译成中文，生成快速摘要、详细总结和灵感选题，只导出 Word：<链接>
 ```
 
-For a local file:
+摘要版示例：
 
 ```text
-Use $echoscript to process /absolute/path/to/podcast.mp3 and export a Chinese transcript
-as PDF.
+处理这个本地播客，只要快速摘要、详细总结和灵感选题，不需要完整文稿，只导出 Markdown：/absolute/path/to/podcast.mp3
 ```
 
-If the content scope or format is missing, the Skill resolves both in one concise question:
+如果没有说明内容范围或格式，Skill 会用一个简短问题确认：
 
-- `summary-only`: quick summary, detailed summary, and topic ideas without a full transcript.
-- `full-transcript`: those three sections plus the complete proofread transcript and, for English sources, a Chinese translation.
+- `摘要版`：快速摘要、详细总结、灵感选题，不附完整文稿。
+- `完整版`：以上三部分，加完整校对文稿；英文源再附中文翻译。
+- 导出格式：`md`、`docx`、`pdf`，可以多选，但不会默认同时生成三份。
 
-Only the selected Markdown, Word, or PDF deliverables are generated; the Skill never defaults to three duplicate files.
+### 本地 ASR 和模型下载规则
 
-### Token efficiency and quality boundary
+EchoScript 不会在转写时静默下载模型：
 
-- A normal run executes documented commands without reading the README or Python source. Script inspection is reserved for an unexplained command failure.
-- Chunking merges same-speaker fragments by default when their gap is at most 2 seconds and total span is at most 30 seconds. Pass `--no-merge` to preserve every source boundary.
-- Summary-only mode may use timestamped show notes to route evidence lookup, but show notes never replace transcript evidence; sparse outlines trigger full chunk coverage.
-- Full-transcript mode processes every indexed chunk once, saves compact evidence notes, and synthesizes from those notes instead of rereading all raw chunks.
-- A full transcript removes only clear ASR noise or accidental duplicates. Meaningful speech is not deleted merely because a summary already covers it.
+1. 已有可用字幕时跳过 ASR。
+2. 没有字幕时先检测 FunASR 和 MLX 模型。
+3. 已有模型但缺少运行环境时，只建议安装运行环境。
+4. 没有本地模型时，优先提供 FunASR `iic/SenseVoiceSmall`；主模型约 1 GB。
+5. 下载或安装前必须获得用户许可。
+6. `whisper-tiny` 只用于冒烟测试，正式长音频必须先明确接受质量风险。
 
-### Local ASR policy
-
-EchoScript never downloads model weights silently during transcription:
-
-1. It checks for existing FunASR and MLX models first.
-2. A ready local model is reused immediately.
-3. If model files exist but the runtime is missing, only runtime installation is suggested.
-4. If no local ASR model exists, FunASR `iic/SenseVoiceSmall` is the preferred download.
-5. Model downloads require explicit user approval.
-
-If only `whisper-tiny` is available, the detector marks it as `smoke-test-only`. It is not silently used for production-length audio: the user must explicitly accept the quality risk and pass `--allow-low-quality-model`, or upgrade to FunASR SenseVoiceSmall or a cached whisper-small model.
-
-Inspect the current state:
+检测：
 
 ```bash
 python3 scripts/local_asr.py doctor
 ```
 
-After download approval, install the preferred FunASR backend:
+获得下载许可后安装首选 FunASR：
 
 ```bash
 python3 scripts/local_asr.py setup --backend funasr
 ```
 
-Transcription automatically selects a ready local backend:
+正常情况下应让 Agent 按 `recommended_action` 决定下一步，不需要手动猜测模型目录。
+
+### Token 优化与质量边界
+
+- 正常流程执行已有脚本，不读取 README 和 Python 源码；只有命令失败且诊断不足时才检查相关脚本。
+- 不重复读取完整 `transcript.raw.json`；后续处理使用分块索引和对应 chunk。
+- 同一说话人的短 ASR 片段默认合并成自然段，减少重复时间戳；`--no-merge` 可保留原始分段。
+- 摘要版可以用带时间戳的 show notes 定位证据，但 show notes 不能替代文字稿。
+- 完整版必须覆盖每一个分块，只通过“逐块读取一次 + 精简证据笔记”减少重复上下文。
+- 完整文字稿只删除确定的 ASR 噪音或意外重复，不会因为观点已经出现在总结中而删除有意义的内容。
+
+### 平台和隐私说明
+
+- YouTube：优先获取公开字幕；部分视频可能受到登录或反自动化限制。
+- 哔哩哔哩：优先使用公开接口获取元数据、字幕和音频，不把 yt-dlp 作为默认 B 站路径。
+- 小宇宙：解析公开节目页面和音频地址，通常需要本地 ASR。
+- 本地转写由本机 ASR 完成；EchoScript 不额外调用第三方 LLM API。校对、翻译和总结会进入当前宿主 Agent 的上下文，仍应遵循 Claude Code、Codex 或其他宿主的隐私与数据政策。
+- 浏览器登录态：只有用户对当前来源明确授权后才能使用。
+- 云端同步：当前不包含 Notion 或飞书上传。
+
+### 手动运行脚本
+
+通常应让 Agent 按 `SKILL.md` 完成整套工作流。以下命令适合排查单个阶段：
 
 ```bash
-python3 scripts/local_asr.py transcribe "/absolute/path/to/job" \
-  --output "/absolute/path/to/job/transcript.raw.json"
+# 获取媒体、字幕或音频
+python3 scripts/media_ingest.py ingest "SOURCE" --output-dir "/absolute/output/job"
+
+# 已确认本地 ASR 就绪后转写
+python3 scripts/local_asr.py transcribe "/absolute/output/job" \
+  --output "/absolute/output/job/transcript.raw.json"
+
+# 合并短片段并分块
+python3 scripts/chunk_transcript.py "/absolute/output/job/transcript.raw.json" \
+  --output-dir "/absolute/output/job/chunks"
+
+# 从 Agent 生成的 document.md 导出指定格式
+python3 scripts/document_export.py export "/absolute/output/job/document.md" \
+  --output-dir "/absolute/output/job/exports" \
+  --formats "docx"
+
+python3 scripts/document_export.py validate "/absolute/output/job/exports"
 ```
 
-### Platform notes
+媒体获取、ASR、分块和导出是本地脚本；校对、翻译和总结需要 Agent 自身的语言能力，不能仅靠运行脚本完成。
 
-- YouTube: public subtitles are preferred, but access may be limited by sign-in or anti-automation controls.
-- Bilibili: public APIs are used for metadata, subtitles, and audio; yt-dlp is not the default Bilibili path.
-- Xiaoyuzhou: public episode metadata and audio are parsed; local ASR is usually required.
-- Browser sessions: signed-in browser state may be used only with explicit permission for the current source.
+### 常见问题
 
-### Document export
+#### Claude Code 找不到 `/echoscript`
 
-Choose the deliverable first and pass it to the required `--formats` argument. Accepted values are `md`, `docx`, `pdf`, or a comma-separated combination. This example generates Word only:
+- 确认入口文件是 `~/.claude/skills/echoscript/SKILL.md`，或项目中的 `.claude/skills/echoscript/SKILL.md`。
+- 不要多套一层目录，例如避免 `echoscript/echoscript/SKILL.md`。
+- 如果 Skills 顶层目录是在当前会话启动后第一次创建，重启 Claude Code。
+- 也可以直接用自然语言描述需求，让 Claude 根据 description 自动发现 Skill。
+
+#### Codex 找不到 `$echoscript`
+
+- 确认入口文件是 `~/.codex/skills/echoscript/SKILL.md`。
+- 安装后新建一个 Codex 任务再试。
+- 也可以把 `SKILL.md` 的绝对路径和任务一起交给 Agent。
+
+#### 提示缺少 FFmpeg、FFprobe、curl 或 yt-dlp
+
+先运行 `media_ingest.py doctor`，按输出安装缺失项。FFprobe 通常随 FFmpeg 一起安装。
+
+#### 本地没有 ASR 模型
+
+这是正常状态。`local_asr.py doctor` 会返回首选安装动作；只有获得许可后才下载 FunASR 模型。
+
+#### MLX 报错 `No Metal device available`
+
+MLX 需要 Apple Silicon 和可访问 Metal 的本机环境。受限沙箱中可在获得权限后重试；非 Apple Silicon 机器优先使用 FunASR。
+
+#### Word 或 PDF 导出失败
+
+确认已安装 `python-docx`、`reportlab`、`pypdf`，然后重新运行导出和 validate 命令。
+
+### 更新
+
+在安装目录执行：
 
 ```bash
-python3 scripts/document_export.py export document.md \
-  --output-dir exports \
-  --formats docx
-
-python3 scripts/document_export.py validate exports
+git pull --ff-only
 ```
 
-`document.md` remains the internal canonical source. Markdown is copied into the export directory only when the user selects it as a deliverable. The exporter also rejects unresolved template placeholders.
+如果通过项目级安装与团队共享，建议使用 Git submodule 或其他固定版本依赖方式，避免不同成员得到不一致的工作流。
 
-When running outside the bundled Codex environment, document export may require:
+### 仓库结构
+
+```text
+echoscript/
+├── SKILL.md                       # Agent 工作流入口
+├── README.md                      # 面向用户的中英文说明
+├── scripts/                       # 媒体、ASR、分块、导出和自检脚本
+├── references/                    # 按需加载的平台与文本处理协议
+├── assets/                        # 文档模板
+└── agents/openai.yaml             # Codex UI 元数据，其他 Agent 可忽略
+```
+
+---
+
+## English
+
+EchoScript is a local-first Agent Skill for turning YouTube, Bilibili, Xiaoyuzhou, local media, subtitle files, or transcripts into proofread transcripts, Chinese translations, summaries, topic ideas, and selected Markdown, Word, or PDF deliverables.
+
+It is not tied to Codex. Claude Code, Codex, and other agents that support `SKILL.md` workflows can all use the same repository.
+
+### Capabilities
+
+- Prefer existing platform subtitles before ASR.
+- Use local FunASR or MLX Whisper when transcription is required.
+- Proofread timestamps, sentence boundaries, punctuation, and clear ASR mistakes.
+- Translate proofread English transcripts into natural Chinese.
+- Produce separate quick summary, detailed summary, and topic-idea sections.
+- Export only the user-selected `md`, `docx`, or `pdf` formats.
+
+Proofreading, translation, and summarization use the current agent's language ability; EchoScript does not call a separate LLM API. Notion and Feishu sync are intentionally deferred.
+
+### Choose an installation scope
+
+| Environment | Recommended location | Invocation | Scope |
+| --- | --- | --- | --- |
+| Claude Code personal skill | `~/.claude/skills/echoscript` | `/echoscript` or natural language | Every Claude Code project |
+| Claude Code project skill | `<project>/.claude/skills/echoscript` | `/echoscript` or natural language | Current project |
+| Codex personal skill | `~/.codex/skills/echoscript` | `$echoscript` or natural language | Every Codex task |
+| Other agents | Any directory | Ask the agent to read `SKILL.md` | Depends on the host agent |
+
+These locations are discovery conventions, not hard-coded script paths.
+
+### Requirements
+
+- macOS or Linux; Windows users are encouraged to use WSL2
+- Python 3.10+
+- Git
+- FFmpeg and FFprobe
+- curl
+- yt-dlp
+
+macOS with Homebrew:
 
 ```bash
-pip install python-docx reportlab pypdf
+brew install python ffmpeg curl yt-dlp git
 ```
 
-### Local self-test
+Ubuntu, Debian, or WSL:
+
+```bash
+sudo apt update
+sudo apt install python3 python3-pip ffmpeg curl git
+python3 -m pip install --upgrade yt-dlp
+```
+
+Install document-export dependencies only if missing:
+
+```bash
+python3 -m pip install python-docx reportlab pypdf
+```
+
+### Claude Code installation
+
+Personal skill, available in every project:
+
+```bash
+mkdir -p ~/.claude/skills
+git clone https://github.com/zyipeng/echoscript-skill.git ~/.claude/skills/echoscript
+```
+
+Project skill shared with a Git repository:
+
+```bash
+mkdir -p .claude/skills
+git submodule add https://github.com/zyipeng/echoscript-skill.git .claude/skills/echoscript
+```
+
+For a local-only project installation that will not be committed, cloning directly into the same path is also acceptable.
+
+Invoke it directly:
+
+```text
+/echoscript Process this English YouTube video, create a full transcript and Chinese translation, and export only DOCX: <URL>
+```
+
+Claude Code can also load the Skill automatically from a natural-language request that matches its description. If you create the top-level skills directory after the current session has started and the Skill does not appear, restart Claude Code once. See the [official Claude Code Skills documentation](https://code.claude.com/docs/en/skills) for discovery and scope details.
+
+### Codex installation
+
+```bash
+mkdir -p ~/.codex/skills
+git clone https://github.com/zyipeng/echoscript-skill.git ~/.codex/skills/echoscript
+```
+
+Start a new Codex task after installation, then use:
+
+```text
+Use $echoscript to process this Bilibili URL, create the full transcript, and export only PDF: <URL>
+```
+
+`$echoscript` is Codex invocation syntax, not a requirement of the EchoScript scripts.
+
+### Other agents and custom locations
+
+Clone the complete repository anywhere:
+
+```bash
+git clone https://github.com/zyipeng/echoscript-skill.git /path/to/echoscript
+```
+
+If the host agent supports the Agent Skills standard, place the directory in its Skills location. Otherwise prompt it explicitly:
+
+```text
+Read /path/to/echoscript/SKILL.md completely and follow it to process this media.
+Create the full transcript, translate English into Chinese, and export only DOCX: <URL or local file>
+```
+
+Keep `scripts/`, `references/`, and `assets/` with `SKILL.md`; they are required parts of the workflow.
+
+### First-run check
+
+From the actual installation directory:
+
+```bash
+python3 scripts/media_ingest.py doctor
+python3 scripts/local_asr.py doctor
+```
+
+The ASR doctor detects runtimes and cached models but does not download model weights.
+
+Run the deterministic local self-test with:
 
 ```bash
 python3 scripts/self_test.py --output-dir /tmp/echoscript-self-test
 ```
 
-The self-test covers local media ingestion, ASR model detection, speaker-safe transcript merging and chunking, and Markdown, DOCX, and PDF export.
+### Request content and format explicitly
+
+Full-transcript example:
+
+```text
+Process this English YouTube URL. Proofread the complete transcript, translate it into Chinese, create all three summary sections, and export only Word: <URL>
+```
+
+Summary-only example:
+
+```text
+Process this local podcast. Create only the quick summary, detailed summary, and topic ideas. Do not include the full transcript. Export Markdown: /absolute/path/to/podcast.mp3
+```
+
+When unspecified, the Skill asks once for the missing choices:
+
+- `summary-only`: quick summary, detailed summary, and topic ideas.
+- `full-transcript`: those sections plus the complete proofread transcript and, for English sources, a Chinese translation.
+- Formats: `md`, `docx`, `pdf`, or an explicit combination. It never defaults to three duplicate files.
+
+### Local ASR policy
+
+EchoScript never downloads model weights silently:
+
+1. Existing subtitles skip ASR.
+2. Local FunASR and MLX models are detected first.
+3. Existing model files are reused; missing runtimes are handled separately.
+4. When no model exists, FunASR `iic/SenseVoiceSmall` is offered first; its main model is about 1 GB.
+5. Setup or model download requires explicit approval.
+6. `whisper-tiny` is smoke-test-only and requires explicit quality-risk acceptance for real transcripts.
+
+### Token efficiency without silent quality loss
+
+- Normal runs execute documented scripts without reading their source code or this README.
+- The raw transcript JSON is not reread after compact chunks are produced.
+- Short same-speaker ASR fragments are merged into natural paragraphs by default.
+- Summary-only mode may use timestamped show notes for navigation, but transcript evidence remains authoritative.
+- Full-transcript mode covers every indexed chunk once and synthesizes from compact evidence notes.
+- Meaningful transcript content is never removed merely because the summary already mentions it.
+
+### Platform, privacy, and current scope
+
+- YouTube: public subtitles are preferred; sign-in and anti-automation restrictions may still apply.
+- Bilibili: public APIs are preferred for metadata, subtitles, and audio; yt-dlp is not the default Bilibili path.
+- Xiaoyuzhou: public episode metadata and audio are parsed; local ASR is usually required.
+- ASR runs locally, and EchoScript does not call a separate third-party LLM API. Proofreading, translation, and summarization still enter the current host agent's context and remain subject to that host's privacy and data policies.
+- Signed-in browser state requires explicit permission for the current source.
+- Notion and Feishu upload are not included in this phase.
+
+### Troubleshooting
+
+**Claude Code does not show `/echoscript`:** verify `~/.claude/skills/echoscript/SKILL.md` or `<project>/.claude/skills/echoscript/SKILL.md`, avoid an extra nested directory, and restart Claude Code if the top-level Skills directory was created after the session started.
+
+**Codex does not discover `$echoscript`:** verify `~/.codex/skills/echoscript/SKILL.md` and start a new task after installation.
+
+**A media dependency is missing:** run `python3 scripts/media_ingest.py doctor`. FFprobe normally ships with FFmpeg.
+
+**No local ASR model exists:** run `python3 scripts/local_asr.py doctor` and follow `recommended_action`; model setup still requires approval.
+
+**MLX reports `No Metal device available`:** MLX requires Apple Silicon and Metal access. Retry outside a restricted sandbox when authorized, or use FunASR on other hardware.
+
+**DOCX or PDF export fails:** install `python-docx`, `reportlab`, and `pypdf`, then rerun export and validation.
+
+### Updating
+
+From the installed repository:
+
+```bash
+git pull --ff-only
+```
+
+### Repository layout
+
+```text
+echoscript/
+├── SKILL.md                       # Agent workflow entrypoint
+├── README.md                      # Bilingual user documentation
+├── scripts/                       # Ingest, ASR, chunking, export, and tests
+├── references/                    # On-demand platform and processing rules
+├── assets/                        # Document template
+└── agents/openai.yaml             # Codex UI metadata; other agents may ignore it
+```
