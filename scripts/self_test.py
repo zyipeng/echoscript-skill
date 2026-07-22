@@ -99,8 +99,31 @@ def main() -> int:
     transcript_path.write_text(json.dumps(transcript, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     chunks_dir = output / "chunks"
     run([sys.executable, str(root / "chunk_transcript.py"), str(transcript_path), "--output-dir", str(chunks_dir), "--max-chars", "2000"])
+    merged_index = json.loads((chunks_dir / "index.json").read_text(encoding="utf-8"))
+    if merged_index["source_segment_count"] != 3 or merged_index["merged_segment_count"] != 1:
+        raise RuntimeError("adjacent same-speaker transcript fragments were not merged")
 
-    chinese_transcript = {**transcript, "language": "zh"}
+    unmerged_chunks = output / "chunks-unmerged"
+    run([
+        sys.executable, str(root / "chunk_transcript.py"), str(transcript_path),
+        "--output-dir", str(unmerged_chunks), "--max-chars", "2000", "--no-merge",
+    ])
+    unmerged_index = json.loads((unmerged_chunks / "index.json").read_text(encoding="utf-8"))
+    if unmerged_index["merged_segment_count"] != 3 or unmerged_index["merge_enabled"]:
+        raise RuntimeError("--no-merge did not preserve source segment boundaries")
+
+    chinese_segments = [
+        {"start_ms": 0, "end_ms": 1000, "speaker": 0, "text": "第一段"},
+        {"start_ms": 1500, "end_ms": 2500, "speaker": 0, "text": "继续说明"},
+        {"start_ms": 2600, "end_ms": 3500, "speaker": 1, "text": "另一位发言"},
+    ]
+    chinese_transcript = {
+        **transcript,
+        "language": "zh",
+        "segments": chinese_segments,
+        "segment_count": len(chinese_segments),
+        "text": "\n".join(item["text"] for item in chinese_segments),
+    }
     chinese_path = output / "transcript.zh.json"
     chinese_path.write_text(json.dumps(chinese_transcript, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     chinese_chunks = output / "chunks-zh"
@@ -108,6 +131,11 @@ def main() -> int:
     chinese_index = json.loads((chinese_chunks / "index.json").read_text(encoding="utf-8"))
     if chinese_index["max_chars"] != 8000:
         raise RuntimeError("CJK transcript did not use the 8000-character adaptive default")
+    chinese_body = (chinese_chunks / "chunk-001.md").read_text(encoding="utf-8")
+    if chinese_index["merged_segment_count"] != 2 or "第一段，继续说明" not in chinese_body:
+        raise RuntimeError("CJK fragments were not joined into a natural paragraph")
+    if chinese_body.count("[说话人") != 2:
+        raise RuntimeError("speaker changes were not preserved during fragment merging")
 
     document = output / "document.md"
     document.write_text(
@@ -175,6 +203,11 @@ def main() -> int:
             "existing_model_action": existing_model["recommended_action"],
         },
         "adaptive_chunk_chars": chinese_index["max_chars"],
+        "segment_merge": {
+            "source": merged_index["source_segment_count"],
+            "merged": merged_index["merged_segment_count"],
+            "speaker_boundaries_preserved": True,
+        },
         "single_format_export": single_files,
         "placeholder_rejected": True,
         "ingest_manifest": str(ingest_dir / "source.json"),

@@ -1,4 +1,4 @@
 interface:
   display_name: "EchoScript"
   short_description: "Local transcription, translation, summaries, and chosen exports"
-  default_prompt: "Use $echoscript to turn this media into a polished Chinese transcript and summary, and ask which document format I want if unspecified."
+  default_prompt: "Use $echoscript to process this media locally; infer requested content and export scope, then ask once for any missing choices."

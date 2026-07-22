@@ -63,7 +63,20 @@ python3 ~/.codex/skills/echoscript/scripts/local_asr.py doctor
 用 $echoscript 处理 /absolute/path/to/podcast.mp3，并输出中文文稿和 PDF。
 ```
 
-如果没有指定格式，Skill 会先询问需要 Markdown、Word、PDF 中的哪一种或多种，不会默认生成三份重复内容。
+如果没有指定内容范围或格式，Skill 会用一个简短问题同时确认：
+
+- `摘要版`：快速摘要、详细总结和灵感选题，不附完整文稿。
+- `完整版`：以上三部分，加完整校对文稿；英文源再附中文翻译。
+
+Skill 只生成用户选择的 Markdown、Word、PDF 格式，不会默认生成三份重复内容。
+
+### Token 优化与质量边界
+
+- 正常运行只执行文档中的命令，不读取 README 或 Python 源码；只有命令失败且诊断不足时才检查相关脚本。
+- 分块脚本默认合并同一说话人、间隔不超过 2 秒且总跨度不超过 30 秒的碎片，减少重复时间戳并改善上下文。用 `--no-merge` 可保留原始分段。
+- 摘要版可用带时间戳的 show notes 定位证据，但 show notes 不能替代文字稿；提纲稀疏时仍需覆盖全部分块。
+- 完整版必须处理每一个分块。最终汇总使用逐块保存的精简证据笔记，避免再次读取整份原始文稿。
+- 完整文字稿只删除确定的 ASR 噪音或意外重复，不会因为观点已出现在总结中就删掉有意义的原话。
 
 ### 本地 ASR 规则
 
@@ -129,7 +142,7 @@ pip install python-docx reportlab pypdf
 python3 scripts/self_test.py --output-dir /tmp/echoscript-self-test
 ```
 
-自检覆盖本地媒体接入、ASR 模型检测、文稿分块及 Markdown、DOCX、PDF 导出。
+自检覆盖本地媒体接入、ASR 模型检测、保留说话人边界的碎片合并与分块，以及 Markdown、DOCX、PDF 导出。
 
 ---
 
@@ -190,7 +203,20 @@ Use $echoscript to process /absolute/path/to/podcast.mp3 and export a Chinese tr
 as PDF.
 ```
 
-If no format is specified, the Skill asks which of Markdown, Word, and PDF is needed instead of generating all three by default.
+If the content scope or format is missing, the Skill resolves both in one concise question:
+
+- `summary-only`: quick summary, detailed summary, and topic ideas without a full transcript.
+- `full-transcript`: those three sections plus the complete proofread transcript and, for English sources, a Chinese translation.
+
+Only the selected Markdown, Word, or PDF deliverables are generated; the Skill never defaults to three duplicate files.
+
+### Token efficiency and quality boundary
+
+- A normal run executes documented commands without reading the README or Python source. Script inspection is reserved for an unexplained command failure.
+- Chunking merges same-speaker fragments by default when their gap is at most 2 seconds and total span is at most 30 seconds. Pass `--no-merge` to preserve every source boundary.
+- Summary-only mode may use timestamped show notes to route evidence lookup, but show notes never replace transcript evidence; sparse outlines trigger full chunk coverage.
+- Full-transcript mode processes every indexed chunk once, saves compact evidence notes, and synthesizes from those notes instead of rereading all raw chunks.
+- A full transcript removes only clear ASR noise or accidental duplicates. Meaningful speech is not deleted merely because a summary already covers it.
 
 ### Local ASR policy
 
@@ -256,4 +282,4 @@ pip install python-docx reportlab pypdf
 python3 scripts/self_test.py --output-dir /tmp/echoscript-self-test
 ```
 
-The self-test covers local media ingestion, ASR model detection, transcript chunking, and Markdown, DOCX, and PDF export.
+The self-test covers local media ingestion, ASR model detection, speaker-safe transcript merging and chunking, and Markdown, DOCX, and PDF export.

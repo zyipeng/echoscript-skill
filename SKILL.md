@@ -1,28 +1,32 @@
 ---
 name: echoscript
-description: Turn YouTube, Bilibili, Xiaoyuzhou podcast links, local audio/video, or subtitle files into timestamped transcripts and polished Chinese content. Use when Codex needs to acquire available subtitles or audio, detect and use local FunASR or MLX speech models without an external model API, translate English transcripts into Chinese, proofread transcripts, create quick summaries/detailed summaries/topic ideas, or export only the selected Markdown, Word DOCX, or PDF deliverables.
+description: Turn YouTube, Bilibili, Xiaoyuzhou podcast links, local audio/video, or subtitle files into timestamped transcripts and polished Chinese content. Use when Codex needs to acquire subtitles or audio, detect and use local FunASR or MLX speech models without an external model API, translate English transcripts into Chinese, proofread transcripts, create quick summaries/detailed summaries/topic ideas, or export only the selected Markdown, Word DOCX, or PDF deliverables.
 ---
 
 # EchoScript
 
-Run a local-first media-to-document workflow. Use deterministic scripts for acquisition, ASR, chunking, and export. Perform translation, proofreading, and summarization directly with the current Agent's language ability; do not invoke another model through curl, HTTP, an SDK, or an external model endpoint.
+Run a local-first media-to-document workflow. Use the bundled scripts for acquisition, ASR, chunking, and export. Perform proofreading, translation, and summarization with the current Agent; never call another LLM through HTTP, an SDK, or an external model endpoint.
 
-## Keep the phase-one boundary
+## Context and phase boundaries
 
-- Do not call an external LLM API for translation, proofreading, or summaries. Perform these text operations directly in the current Agent response/workspace.
-- Prefer existing subtitles; run local ASR only when no usable transcript exists.
-- Detect local ASR runtimes and model files before suggesting any download. Reuse a ready local FunASR or MLX model instead of downloading another model.
-- Do not ask for an ASR API key. If no local ASR model exists, offer FunASR SenseVoiceSmall first, explain the download, and request approval before running `local_asr.py setup`.
-- Do not upload to Notion, Feishu, or any other cloud destination in this version. Cloud storage is a later phase after local testing.
-- Never borrow browser cookies or a signed-in browser session without explicit approval for that exact source.
+- During a normal run, do not read `README.md` or any `scripts/*.py` source. Execute the documented commands. Inspect only the relevant script after a command fails and its diagnostic is insufficient.
+- Do not read the full `transcript.raw.json`; it duplicates chunk content. Read `chunks/index.json` and the needed chunk files.
+- Load [references/platforms.md](references/platforms.md) only after ingest fails or before requesting browser-session access.
+- Prefer existing subtitles. Run local ASR only when no usable transcript exists.
+- Detect local ASR files before suggesting a download. Offer FunASR SenseVoiceSmall first only when no suitable local model exists, and request approval before setup.
+- Do not upload to Notion, Feishu, or another cloud destination in this phase.
+- Never borrow browser cookies or a signed-in session without explicit permission for that source.
 
-## 1. Resolve deliverables and inspect capabilities
+## 1. Resolve content and export scope
 
-Resolve the requested export formats before doing the long-running work:
+Infer selections already present in the request; do not ask twice.
 
-- If the user already named Markdown, Word/DOCX, PDF, or any combination, record exactly that selection and do not ask again.
-- If the user did not name a format, ask one concise question: `最终需要 Markdown、Word 还是 PDF？可以多选。`
-- Never default to all three formats. Generate only the selected deliverables; `document.md` may still exist as an internal canonical working file.
+- `summary-only`: metadata plus `快速摘要`, `详细总结`, and `灵感选题`; omit full transcript and translation.
+- `full-transcript`: the three summary sections plus the complete proofread transcript; add Chinese translation only for English sources.
+- If the user explicitly requests particular sections, include exactly those sections.
+- Export only the selected `md`, `docx`, or `pdf` formats. Never default to all three.
+
+If either choice is missing, ask one combined concise question covering only the missing choices, for example: `需要摘要版，还是包含完整校对文稿（英文附中文翻译）的完整版？导出 Markdown、Word 还是 PDF？可以多选。`
 
 Run:
 
@@ -31,34 +35,26 @@ python3 scripts/media_ingest.py doctor
 python3 scripts/local_asr.py doctor
 ```
 
-Use absolute paths for the skill scripts and user files when the current working directory is not the skill directory.
+Use absolute script and user-file paths when outside the Skill directory.
 
 ## 2. Acquire the source
 
-Create a dedicated output directory, then run:
+Create a dedicated job directory and run:
 
 ```bash
 python3 scripts/media_ingest.py ingest "SOURCE" --output-dir "/absolute/output/job"
 ```
 
-The command writes `source.json` and, when subtitles are available, `transcript.raw.json`. If subtitles are unavailable, it downloads or references an audio file and records its path in `source.json`.
+This writes `source.json` and either `transcript.raw.json` or a local audio path. If ingest fails, then read [references/platforms.md](references/platforms.md) and follow only the relevant platform section.
 
-Platform behavior and permission-sensitive fallbacks are in [references/platforms.md](references/platforms.md). Read it before using a browser session or diagnosing a platform failure.
+## 3. Transcribe only when needed
 
-## 3. Detect, then transcribe locally only when needed
+Skip ASR when `transcript.raw.json` exists. Otherwise inspect the JSON from `local_asr.py doctor` and follow `recommended_action`:
 
-If `transcript.raw.json` already exists, skip ASR. Otherwise inspect the JSON from:
-
-```bash
-python3 scripts/local_asr.py doctor
-```
-
-Follow `recommended_action` exactly:
-
-- If `ready` is `true` and `requires_quality_confirmation` is `false`, use the selected local backend without downloading anything.
-- If `requires_quality_confirmation` is `true`, show `quality_warning` and offer the preferred FunASR download. Do not use a smoke-test-only model for a real transcript without explicit user acceptance.
-- If a local model exists but its runtime is missing, request approval only to install the runtime; use the returned `setup_command`, which includes `--skip-model-download`.
-- If no local ASR model exists, tell the user that the preferred download is FunASR `iic/SenseVoiceSmall` plus its VAD component and that the main model is about 1 GB. Run the returned setup command only after explicit approval.
+- Reuse a ready local FunASR or MLX model.
+- If model files exist but the runtime is missing, request approval to install only the runtime using the returned setup command.
+- If no model exists, explain that the preferred FunASR `iic/SenseVoiceSmall` main model is about 1 GB, then run the returned setup command only after approval.
+- If `requires_quality_confirmation` is true, show `quality_warning`. Never use a `smoke-test-only` model for a real transcript without explicit acceptance.
 
 After the detector reports `ready: true`, run:
 
@@ -67,55 +63,31 @@ python3 scripts/local_asr.py transcribe "/absolute/output/job" \
   --output "/absolute/output/job/transcript.raw.json"
 ```
 
-Auto selection prefers a ready FunASR installation, then a ready cached MLX model. Do not force a FunASR download when another compatible local model is already ready.
+The command must refuse uncached weights rather than download silently. After approved FunASR setup, run `python3 scripts/local_asr.py setup --backend funasr`. For an explicitly accepted tiny model, add `--model mlx-community/whisper-tiny-mlx --allow-low-quality-model`.
 
-`whisper-tiny` is smoke-test-only. After the user explicitly accepts its quality risk, allow it with:
+If a ready MLX model fails with `No Metal device available` in a restricted sandbox, rerun the same local command with host permission; do not switch to an external API.
 
-```bash
-python3 scripts/local_asr.py transcribe "/absolute/output/job" \
-  --output "/absolute/output/job/transcript.raw.json" \
-  --model mlx-community/whisper-tiny-mlx \
-  --allow-low-quality-model
-```
+## 4. Build a token-efficient evidence set
 
-To select another already-cached model explicitly, pass `--backend mlx --model MODEL_ID` or `--backend funasr --model MODEL_ID`. The command still refuses uncached weights instead of downloading them.
-
-After download approval, the default setup installs the local FunASR runtime and only the missing model components:
-
-```bash
-python3 scripts/local_asr.py setup --backend funasr
-```
-
-Never run setup speculatively. `transcribe` must fail with an actionable message instead of silently downloading weights.
-
-If the selected cached backend is MLX and macOS reports `No Metal device available` inside a restricted sandbox, rerun the same local transcription command with host permission so MLX can access the Apple GPU. Do not change to an external API fallback.
-
-## 4. Process text with the Agent
-
-For a long transcript, split it without breaking timestamped segments. The default is language-aware: 8,000 characters for CJK transcripts and 12,000 for other languages.
+Merge adjacent same-speaker fragments by default (gap at most 2 seconds, paragraph span at most 30 seconds), then split at language-aware limits of 8,000 CJK or 12,000 other characters:
 
 ```bash
 python3 scripts/chunk_transcript.py "/absolute/output/job/transcript.raw.json" \
   --output-dir "/absolute/output/job/chunks"
 ```
 
-Read [references/processing.md](references/processing.md) before proofreading, translating, or summarizing. Follow its evidence rules and output structure.
+Use `--no-merge` only when exact source-segment boundaries are required. Read `chunks/index.json` for language, model, quality tier, counts, and coverage; do not reopen the raw JSON for the same data.
 
-Inspect `transcript.raw.json` before processing, then use this checklist:
+Choose one protocol:
 
-1. Read the `language`, `model`, and `quality_tier` fields and the source metadata.
-2. Proofread in the source language while preserving meaning, timestamps, speaker labels, and uncertainty markers.
-3. If `quality_tier` is `smoke-test-only`, use show notes only as spelling/topic hints. Never reconstruct missing speech from the description; retain uncertainty markers.
-4. If the transcript language is English, translate the proofread version into natural Chinese. If it is Chinese, skip translation and remove the entire translation section. Do not translate other languages unless requested.
-5. Process every chunk in `index.json` order and verify processed chunk count equals `chunk_count` before synthesis.
-6. Generate separate `快速摘要`, `详细总结`, and `灵感选题` sections from the complete proofread or translated text.
-7. Assemble `document.md` from [assets/document-template.md](assets/document-template.md). Omit sections that do not apply; do not leave any `{{...}}` placeholders.
+- For `summary-only`, read [references/processing-summary.md](references/processing-summary.md). Use timestamped show notes as a navigation skeleton only when sufficiently detailed; validate claims against transcript evidence and fall back to full chunk coverage when the outline is sparse.
+- For `full-transcript`, proofreading, or translation, read [references/processing-full.md](references/processing-full.md). Process every indexed chunk exactly once, save compact notes and processed text, synthesize from the notes, and concatenate processed chunks without rereading all raw chunks.
 
-Do not silently summarize only the first chunks. Use the compact coverage checklist in [references/processing.md](references/processing.md); do not rely on memory alone.
+Never use show notes to reconstruct missing speech or as evidence for a quotation. Preserve uncertainty. If `quality_tier` is `smoke-test-only`, stop for confirmation before text processing.
 
-## 5. Export and verify documents
+Assemble `document.md` from [assets/document-template.md](assets/document-template.md). Remove unused sections and every unresolved `{{...}}` placeholder. A full transcript may merge timestamp fragments into natural paragraphs and remove only obvious ASR artifacts; never shorten meaningful passages merely because the summary repeats them, and never label deleted meaningful content as `[略]`.
 
-Run:
+## 5. Export and verify
 
 ```bash
 python3 scripts/document_export.py export "/absolute/output/job/document.md" \
@@ -125,19 +97,8 @@ python3 scripts/document_export.py export "/absolute/output/job/document.md" \
 python3 scripts/document_export.py validate "/absolute/output/job/exports"
 ```
 
-Use a comma-separated selection such as `md`, `docx`, `pdf`, or `docx,pdf`. The exporter requires this argument and rejects unresolved template placeholders. It uses `python-docx` for Word and ReportLab with an embedded local CJK font for PDF.
-
-Visually render and inspect DOCX or PDF only when that format was selected and document tools are available. Fix clipped text, broken CJK glyphs, spacing, table, or pagination defects before delivery.
+Use a comma-separated selection such as `md`, `docx`, `pdf`, or `docx,pdf`. Visually inspect DOCX or PDF only when selected and rendering tools are available. Fix clipping, broken CJK glyphs, spacing, tables, or pagination before delivery.
 
 ## 6. Report completion
 
-Return:
-
-- title, platform, source URL or local filename, and detected language;
-- whether the transcript came from subtitles or local ASR;
-- which of proofreading, English-to-Chinese translation, and the three summary sections were completed;
-- clickable links or absolute paths only for the formats the user selected;
-- the export-directory path and, as an optional convenience, `open "/path/to/exports"` on macOS;
-- any explicit limitation, such as YouTube access restrictions or locally unclear audio.
-
-Do not open Finder or another GUI unless the user asks. Do not claim a format exists until validation passes. Do not mention Notion or Feishu unless the user asks about the deferred second phase.
+Return the source metadata and language, subtitle/ASR origin, completed content sections, validated links only for selected formats, the export directory, and any concrete limitation. Do not open a GUI unless asked. Do not claim a file exists before validation passes. Do not mention deferred cloud sync unless the user asks.
