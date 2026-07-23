@@ -1,18 +1,51 @@
 # EchoScript
 
+> 🎙️ 本地优先的媒体整理 Agent Skill —— 把 YouTube / 哔哩哔哩 / 小宇宙 / 本地音视频，一步转成校对文字稿、中文翻译、摘要与选题，并按需导出 Markdown / Word / PDF。
+
+<p align="center">
+  <img alt="platform" src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20WSL2-blue">
+  <img alt="python" src="https://img.shields.io/badge/python-3.10%2B-3776AB">
+  <img alt="ASR" src="https://img.shields.io/badge/ASR-FunASR%20%7C%20MLX%20Whisper-success">
+  <img alt="LLM" src="https://img.shields.io/badge/LLM-无需外部%20API-orange">
+  <img alt="agents" src="https://img.shields.io/badge/agents-Claude%20Code%20%7C%20Codex%20%7C%20SKILL.md-informational">
+</p>
+
 [简体中文](#简体中文) · [English](#english)
 
-中文快速入口：[Claude Code 安装](#安装到-claude-code) · [Codex 安装](#安装到-codex) · [其他 Agent](#在其他-agent-中使用) · [常见问题](#常见问题)
+中文快速入口：[30 秒上手](#30-秒上手) · [Claude Code 安装](#安装到-claude-code) · [Codex 安装](#安装到-codex) · [其他 Agent](#在其他-agent-中使用) · [环境变量](#环境变量与镜像加速) · [常见问题](#常见问题)
 
-English quick links: [Claude Code](#claude-code-installation) · [Codex](#codex-installation) · [Other agents](#other-agents-and-custom-locations) · [Troubleshooting](#troubleshooting)
+English quick links: [Quick start](#quick-start) · [Claude Code](#claude-code-installation) · [Codex](#codex-installation) · [Other agents](#other-agents-and-custom-locations) · [Environment](#environment-variables-and-mirrors) · [Troubleshooting](#troubleshooting)
 
 EchoScript 是一个兼容 Agent Skills / `SKILL.md` 工作流的本地优先媒体整理工具。它可以从 YouTube、哔哩哔哩、小宇宙或本地音视频中获取字幕或音频，生成校对文字稿、英文到中文翻译、内容总结，并按需导出 Markdown、Word 或 PDF。
 
-它不把 Codex 当作唯一运行环境：Claude Code、Codex，以及能够读取 `SKILL.md` 并执行本地脚本的其他 Agent 都可以使用。
+**它的特别之处：**
+
+- 🔒 **本地优先，隐私可控** —— ASR 在本机跑（FunASR / MLX Whisper），不额外调用第三方 LLM API。
+- 🧩 **不绑定单一 Agent** —— Claude Code、Codex，以及任何能读取 `SKILL.md` 并执行本地脚本的 Agent 都能用。
+- 🎯 **按需产出，不浪费 Token** —— 摘要版 / 完整版自由选，导出格式自由选，绝不默认生成三份。
+- ⚙️ **开箱即用的运行时** —— `setup` 自动装齐 FunASR 运行时（含 `torch`），导出依赖在隔离环境中自动补齐，绕开系统 Python 的 PEP 668 限制。
 
 ---
 
 ## 简体中文
+
+### 30 秒上手
+
+```bash
+# 1. 安装（以 Claude Code 个人 Skill 为例）
+git clone https://github.com/zyipeng/echoscript-skill.git ~/.claude/skills/echoscript
+
+# 2. 检查依赖（媒体获取 + 本地 ASR，不会自动下载模型）
+cd ~/.claude/skills/echoscript
+python3 scripts/media_ingest.py doctor
+python3 scripts/local_asr.py doctor
+```
+
+然后在 Agent 里一句话说清「来源 + 范围 + 格式」即可：
+
+```text
+处理这个小宇宙链接，生成摘要版，只导出 Markdown：<链接>
+```
 
 ### 你可以用它做什么
 
@@ -34,6 +67,26 @@ EchoScript 是一个兼容 Agent Skills / `SKILL.md` 工作流的本地优先媒
 - 只导出你选择的 Markdown、Word DOCX、PDF 格式
 
 翻译、校对和总结由当前 Agent 自身完成，EchoScript 不再额外接入另一套 LLM API。Notion 和飞书同步属于后续阶段，当前版本只生成本地文件。
+
+### 工作流一览
+
+```text
+  输入源                本地脚本                        Agent 语言能力              产物
+┌─────────┐   ingest   ┌──────────────┐   转写    ┌─────────────┐          ┌──────────┐
+│ YouTube │──────────▶ │ media_ingest │─────────▶ │  local_asr  │          │ 校对文字稿 │
+│ 哔哩哔哩 │           │  字幕/音频    │  (无字幕时) │ FunASR/MLX  │          │ 中文翻译   │
+│ 小宇宙   │           └──────────────┘           └──────┬──────┘          │ 快速摘要   │
+│ 本地音视频│                                            │ transcript.json  │ 详细总结   │
+│ 字幕文件 │                                     ┌──────▼───────┐   Agent  │ 灵感选题   │
+└─────────┘                                     │ chunk_transcript │──────▶│ document.md│
+                                                └──────────────┘  校对/翻译 └─────┬────┘
+                                                                    /总结         │ export
+                                                                            ┌─────▼─────┐
+                                                                            │ md/docx/pdf│
+                                                                            └───────────┘
+```
+
+获取、转写、分块、导出是本地脚本；校对、翻译、总结依赖当前宿主 Agent 的语言能力。
 
 ### 先选一种安装方式
 
@@ -72,7 +125,7 @@ sudo apt install python3 python3-pip ffmpeg curl git
 python3 -m pip install --upgrade yt-dlp
 ```
 
-Word 和 PDF 导出如果缺少 Python 依赖，再安装：
+Word 和 PDF 导出依赖（`python-docx`、`reportlab`、`pypdf`）通常**无需手动安装**：导出脚本会自动装进 EchoScript 的隔离环境（见 [环境变量与镜像加速](#环境变量与镜像加速)），从而绕开系统 Python 的 PEP 668 限制。仅在你想手动预装时才需要：
 
 ```bash
 python3 -m pip install python-docx reportlab pypdf
@@ -209,7 +262,31 @@ python3 scripts/local_asr.py doctor
 python3 scripts/local_asr.py setup --backend funasr
 ```
 
+`setup` 会把 FunASR 运行时**连同 `torch`、`torchaudio` 一起装入隔离环境**，并在装完后校验模块是否可用——避免出现「funasr 能导入但缺 torch，一转写就崩」的假就绪状态。安装过程会实时打印进度。
+
 正常情况下应让 Agent 按 `recommended_action` 决定下一步，不需要手动猜测模型目录。
+
+### 环境变量与镜像加速
+
+默认从官方源下载依赖和模型在国内可能很慢。可在运行 `setup` 前导出以下变量加速：
+
+| 变量 | 作用 |
+| --- | --- |
+| `ECHOSCRIPT_PIP_INDEX_URL` / `PIP_INDEX_URL` | pip 主镜像，如清华 `https://pypi.tuna.tsinghua.edu.cn/simple` |
+| `ECHOSCRIPT_PIP_EXTRA_INDEX_URL` | pip 额外镜像 |
+| `ECHOSCRIPT_HF_ENDPOINT` | HuggingFace 镜像端点（如 `https://hf-mirror.com`） |
+| `ECHOSCRIPT_DOCUMENT_PYTHON` | 指定已装好 `python-docx/pypdf/reportlab` 的 Python，用于文档导出 |
+| `ECHOSCRIPT_CACHE_DIR` | 覆盖默认缓存目录 `~/.cache/echoscript-skill` |
+
+示例：
+
+```bash
+export ECHOSCRIPT_PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+export ECHOSCRIPT_HF_ENDPOINT=https://hf-mirror.com
+python3 scripts/local_asr.py setup --backend funasr
+```
+
+**文档导出运行时自动发现顺序**：`ECHOSCRIPT_DOCUMENT_PYTHON` → EchoScript 自身的 `~/.cache/echoscript-skill/funasr-venv`（或 `asr-venv`）→ 旧版 Codex 运行时。若都不可用，脚本会自动把导出依赖装进已有的隔离环境，无需你手动处理 PEP 668 报错。
 
 ### Token 优化与质量边界
 
@@ -219,6 +296,7 @@ python3 scripts/local_asr.py setup --backend funasr
 - 摘要版可以用带时间戳的 show notes 定位证据，但 show notes 不能替代文字稿。
 - 完整版必须覆盖每一个分块，只通过“逐块读取一次 + 精简证据笔记”减少重复上下文。
 - 完整文字稿只删除确定的 ASR 噪音或意外重复，不会因为观点已经出现在总结中而删除有意义的内容。
+- 转写结果会标记 `timestamp_granularity`：若模型只给出整段级时间戳（`coarse`，无逐句时间轴），文档中的时间戳会被当作**章节近似导航**，并在「处理说明」中注明，不会伪装成精确逐句时间。
 
 ### 平台和隐私说明
 
@@ -284,7 +362,7 @@ MLX 需要 Apple Silicon 和可访问 Metal 的本机环境。受限沙箱中可
 
 #### Word 或 PDF 导出失败
 
-确认已安装 `python-docx`、`reportlab`、`pypdf`，然后重新运行导出和 validate 命令。
+导出脚本会优先自动把 `python-docx`、`reportlab`、`pypdf` 装入 EchoScript 的隔离环境。若仍失败，可先运行一次 `python3 scripts/local_asr.py setup --backend funasr` 创建隔离环境，或设置 `ECHOSCRIPT_DOCUMENT_PYTHON` 指向已装好这三个依赖的 Python，再重新运行导出和 validate 命令。国内下载慢可参考 [环境变量与镜像加速](#环境变量与镜像加速)。
 
 ### 更新
 
@@ -314,7 +392,30 @@ echoscript/
 
 EchoScript is a local-first Agent Skill for turning YouTube, Bilibili, Xiaoyuzhou, local media, subtitle files, or transcripts into proofread transcripts, Chinese translations, summaries, topic ideas, and selected Markdown, Word, or PDF deliverables.
 
-It is not tied to Codex. Claude Code, Codex, and other agents that support `SKILL.md` workflows can all use the same repository.
+**What makes it different:**
+
+- 🔒 **Local-first & private** — ASR runs on your machine (FunASR / MLX Whisper); no separate third-party LLM API is called.
+- 🧩 **Not tied to one agent** — Claude Code, Codex, and any agent that reads `SKILL.md` and runs local scripts can use it.
+- 🎯 **Produce only what you ask** — pick summary-only vs full-transcript and pick export formats; it never defaults to three files.
+- ⚙️ **Batteries-included runtime** — `setup` installs the full FunASR runtime (including `torch`); export dependencies are auto-provisioned into an isolated venv, sidestepping system-Python PEP 668 errors.
+
+### Quick start
+
+```bash
+# 1. Install (Claude Code personal skill shown here)
+git clone https://github.com/zyipeng/echoscript-skill.git ~/.claude/skills/echoscript
+
+# 2. Check dependencies (ingest + local ASR; no model download)
+cd ~/.claude/skills/echoscript
+python3 scripts/media_ingest.py doctor
+python3 scripts/local_asr.py doctor
+```
+
+Then state source + scope + format in one sentence:
+
+```text
+Process this Xiaoyuzhou link, summary-only, export Markdown only: <URL>
+```
 
 ### Capabilities
 
@@ -361,7 +462,7 @@ sudo apt install python3 python3-pip ffmpeg curl git
 python3 -m pip install --upgrade yt-dlp
 ```
 
-Install document-export dependencies only if missing:
+Install document-export dependencies only if you want to preinstall them manually — the export script otherwise auto-provisions them into EchoScript's isolated venv (see [Environment variables and mirrors](#environment-variables-and-mirrors)):
 
 ```bash
 python3 -m pip install python-docx reportlab pypdf
@@ -473,6 +574,22 @@ EchoScript never downloads model weights silently:
 5. Setup or model download requires explicit approval.
 6. `whisper-tiny` is smoke-test-only and requires explicit quality-risk acceptance for real transcripts.
 
+`setup --backend funasr` installs the FunASR runtime together with `torch`/`torchaudio` into an isolated venv and verifies the modules afterwards, so a torch-less environment is no longer falsely reported as ready. Install progress is streamed to stdout.
+
+### Environment variables and mirrors
+
+Downloading from default indexes can be slow. Export these before `setup` to speed things up:
+
+| Variable | Purpose |
+| --- | --- |
+| `ECHOSCRIPT_PIP_INDEX_URL` / `PIP_INDEX_URL` | Primary pip mirror |
+| `ECHOSCRIPT_PIP_EXTRA_INDEX_URL` | Extra pip mirror |
+| `ECHOSCRIPT_HF_ENDPOINT` | HuggingFace mirror endpoint (e.g. `https://hf-mirror.com`) |
+| `ECHOSCRIPT_DOCUMENT_PYTHON` | Python that already has `python-docx/pypdf/reportlab`, used for export |
+| `ECHOSCRIPT_CACHE_DIR` | Override the default cache dir `~/.cache/echoscript-skill` |
+
+The exporter discovers a runtime in this order: `ECHOSCRIPT_DOCUMENT_PYTHON` → EchoScript's own `~/.cache/echoscript-skill/funasr-venv` (or `asr-venv`) → legacy Codex runtimes. If none are ready it provisions the packages into an existing venv, avoiding PEP 668 failures on system Python.
+
 ### Token efficiency without silent quality loss
 
 - Normal runs execute documented scripts without reading their source code or this README.
@@ -481,6 +598,7 @@ EchoScript never downloads model weights silently:
 - Summary-only mode may use timestamped show notes for navigation, but transcript evidence remains authoritative.
 - Full-transcript mode covers every indexed chunk once and synthesizes from compact evidence notes.
 - Meaningful transcript content is never removed merely because the summary already mentions it.
+- Transcripts carry a `timestamp_granularity` flag; when it is `coarse` (whole-audio segment, no per-sentence timeline), in-document timestamps are treated as approximate chapter navigation and labeled as such in the processing notes.
 
 ### Platform, privacy, and current scope
 
@@ -503,7 +621,7 @@ EchoScript never downloads model weights silently:
 
 **MLX reports `No Metal device available`:** MLX requires Apple Silicon and Metal access. Retry outside a restricted sandbox when authorized, or use FunASR on other hardware.
 
-**DOCX or PDF export fails:** install `python-docx`, `reportlab`, and `pypdf`, then rerun export and validation.
+**DOCX or PDF export fails:** the exporter first auto-provisions `python-docx`, `reportlab`, and `pypdf` into EchoScript's isolated venv. If it still fails, run `python3 scripts/local_asr.py setup --backend funasr` once to create the venv, or set `ECHOSCRIPT_DOCUMENT_PYTHON` to a Python that already has the three packages, then rerun export and validation. For slow downloads see [Environment variables and mirrors](#environment-variables-and-mirrors).
 
 ### Updating
 
