@@ -21,9 +21,45 @@ FUNASR_VAD_MODEL = "iic/speech_fsmn_vad_zh-cn-16k-common-pytorch"
 MLX_DEFAULT_MODEL = "mlx-community/whisper-small-mlx"
 MLX_TINY_MODEL = "mlx-community/whisper-tiny-mlx"
 
+# Runtime Python modules required before FunASR can actually transcribe.
+# funasr imports torch at call time, so torch must be present or the worker
+# crashes with "缺少 torch" even though funasr itself is installed.
+FUNASR_RUNTIME_MODULES = ("funasr", "modelscope", "torch", "torchaudio")
+FUNASR_PIP_PACKAGES = ("funasr", "modelscope", "torch", "torchaudio")
+
 
 class AsrError(RuntimeError):
     pass
+
+
+def pip_mirror_env() -> dict[str, str]:
+    """Return environment overrides enabling optional pip / model mirrors.
+
+    Users in mainland China can export ECHOSCRIPT_PIP_INDEX_URL (or the
+    standard PIP_INDEX_URL) plus ECHOSCRIPT_HF_ENDPOINT / MODELSCOPE mirrors to
+    dramatically speed up otherwise ~40kB/s default-index downloads.
+    """
+    environment = os.environ.copy()
+    pip_index = os.environ.get("ECHOSCRIPT_PIP_INDEX_URL") or os.environ.get("PIP_INDEX_URL")
+    if pip_index:
+        environment["PIP_INDEX_URL"] = pip_index
+    pip_extra = os.environ.get("ECHOSCRIPT_PIP_EXTRA_INDEX_URL")
+    if pip_extra:
+        environment["PIP_EXTRA_INDEX_URL"] = pip_extra
+    hf_endpoint = os.environ.get("ECHOSCRIPT_HF_ENDPOINT")
+    if hf_endpoint:
+        environment["HF_ENDPOINT"] = hf_endpoint
+    return environment
+
+
+def run_streaming(command: list[str], *, env: dict[str, str] | None = None, label: str | None = None) -> None:
+    """Run a subprocess while streaming its output so slow installs show progress."""
+    if label:
+        print(f"[echoscript] {label}", flush=True)
+    print(f"[echoscript] $ {' '.join(command)}", flush=True)
+    result = subprocess.run(command, env=env)
+    if result.returncode != 0:
+        raise AsrError(f"命令执行失败（退出码 {result.returncode}）：{' '.join(command)}")
 
 
 def utc_now() -> str:
@@ -58,8 +94,15 @@ def environment_python(cache_dir: Path, backend: str) -> Path:
     return cache_dir / name / "bin" / "python"
 
 
+def python_has_all_modules(executable: Path, modules: tuple[str, ...]) -> bool:
+    return all(python_has_module(executable, module) for module in modules)
+
+
 def resolve_asr_python(cache_dir: Path, backend: str) -> Path | None:
-    module = "funasr" if backend == "funasr" else "mlx_whisper"
+    # A FunASR runtime is only usable when torch/torchaudio are also present;
+    # checking just "funasr" produced false "ready" states that crashed at
+    # transcribe time. Require the full runtime module set for funasr.
+    modules = FUNASR_RUNTIME_MODULES if backend == "funasr" else ("mlx_whisper",)
     override_name = "ECHOSCRIPT_FUNASR_PYTHON" if backend == "funasr" else "ECHOSCRIPT_ASR_PYTHON"
     override = os.environ.get(override_name)
     candidates = [
@@ -68,7 +111,7 @@ def resolve_asr_python(cache_dir: Path, backend: str) -> Path | None:
         Path(sys.executable),
     ]
     return next(
-        (candidate for candidate in candidates if candidate and python_has_module(candidate, module)),
+        (candidate for candidate in candidates if candidate and python_has_all_modules(candidate, modules)),
         None,
     )
 
@@ -294,13 +337,28 @@ def parse_last_json_line(output: str) -> dict[str, Any]:
 
 def setup_funasr(args: argparse.Namespace, cache_dir: Path) -> dict[str, Any]:
     python, pip = create_venv(cache_dir, "funasr")
-    runtime_present = python_has_module(python, "funasr") and python_has_module(python, "modelscope")
+    # torch/torchaudio are required at transcribe time; install them together
+    # with funasr so the runtime is genuinely usable, not just importable.
+    runtime_present = python_has_all_modules(python, FUNASR_RUNTIME_MODULES)
+    installed_packages: list[str] = []
     if not runtime_present or args.upgrade:
         command = [str(pip), "install"]
         if args.upgrade:
             command.append("--upgrade")
-        command.extend(["funasr", "modelscope"])
-        subprocess.run(command, check=True)
+        command.extend(FUNASR_PIP_PACKAGES)
+        run_streaming(
+            command,
+            env=pip_mirror_env(),
+            label=f"安装 FunASR 运行时依赖：{', '.join(FUNASR_PIP_PACKAGES)}",
+        )
+        installed_packages = list(FUNASR_PIP_PACKAGES)
+        # Fail fast with an actionable message if the runtime is still broken.
+        missing_modules = [m for m in FUNASR_RUNTIME_MODULES if not python_has_module(python, m)]
+        if missing_modules:
+            raise AsrError(
+                "FunASR 运行时安装后仍缺少模块：" + ", ".join(missing_modules)
+                + "。可设置 ECHOSCRIPT_PIP_INDEX_URL 使用国内镜像后重试。"
+            )
 
     main_model = find_funasr_model(FUNASR_MODEL, cache_dir, "ECHOSCRIPT_FUNASR_MODEL")
     vad_model = find_funasr_model(FUNASR_VAD_MODEL, cache_dir, "ECHOSCRIPT_FUNASR_VAD_MODEL")
@@ -322,7 +380,7 @@ def setup_funasr(args: argparse.Namespace, cache_dir: Path) -> dict[str, Any]:
         ]
         for model_id in missing:
             command.extend(["--model-id", model_id])
-        result = subprocess.run(command, check=True, text=True, capture_output=True)
+        result = subprocess.run(command, check=True, text=True, capture_output=True, env=pip_mirror_env())
         payload = parse_last_json_line(result.stdout)
         for model_id, value in (payload.get("models") or {}).items():
             path = Path(str(value)).expanduser().resolve()
@@ -335,6 +393,7 @@ def setup_funasr(args: argparse.Namespace, cache_dir: Path) -> dict[str, Any]:
     return {
         "backend": "funasr",
         "python": str(python),
+        "installed_packages": installed_packages,
         "downloaded": downloaded,
         "model_download_skipped": bool(args.skip_model_download),
         "state": local_asr_state(cache_dir),
@@ -350,12 +409,12 @@ def setup_mlx(args: argparse.Namespace, cache_dir: Path) -> dict[str, Any]:
         if args.upgrade:
             command.append("--upgrade")
         command.append("mlx-whisper")
-        subprocess.run(command, check=True)
+        run_streaming(command, env=pip_mirror_env(), label="安装 MLX Whisper 运行时")
     model = args.model or MLX_DEFAULT_MODEL
     downloaded: list[str] = []
     if not mlx_model_is_cached(model) and not args.skip_model_download:
         code = "from huggingface_hub import snapshot_download; snapshot_download(repo_id=" + repr(model) + ")"
-        subprocess.run([str(python), "-c", code], check=True)
+        run_streaming([str(python), "-c", code], env=pip_mirror_env(), label=f"下载 MLX 模型 {model}")
         downloaded.append(model)
     return {
         "backend": "mlx-whisper",
@@ -504,15 +563,28 @@ def transcribe(args: argparse.Namespace) -> None:
     result = subprocess.run(worker, env=worker_environment)
     if result.returncode != 0:
         raise AsrError(f"本地 {backend} 转写失败")
+    granularity = "unknown"
+    try:
+        produced = json.loads(output.read_text(encoding="utf-8"))
+        granularity = str(produced.get("timestamp_granularity") or "unknown")
+    except (OSError, ValueError, json.JSONDecodeError):
+        pass
     if source_manifest:
         payload = json.loads(source_manifest.read_text(encoding="utf-8"))
         payload["transcript_path"] = str(output)
         payload["transcript_origin"] = transcript_origin
         payload["transcript_model"] = model
+        payload["transcript_timestamp_granularity"] = granularity
         payload["transcript_quality_tier"] = model_quality(
             "funasr" if backend == "funasr" else "mlx-whisper", model
         )["tier"]
         write_json(source_manifest, payload)
+    timestamp_note = None
+    if granularity == "coarse":
+        timestamp_note = (
+            "本次转写仅得到整段级时间戳（无逐句时间轴）。文稿中的时间戳只能作为章节近似导航，"
+            "不可当作精确逐句时间，请在最终文档的“处理说明”中注明。"
+        )
     print(json.dumps({
         "ok": True,
         "backend": backend,
@@ -521,6 +593,8 @@ def transcribe(args: argparse.Namespace) -> None:
         "quality_tier": model_quality(
             "funasr" if backend == "funasr" else "mlx-whisper", model
         )["tier"],
+        "timestamp_granularity": granularity,
+        "timestamp_note": timestamp_note,
         "language_hint": effective_language,
     }, ensure_ascii=False, indent=2))
 
@@ -543,6 +617,18 @@ def audio_duration_ms(path: str) -> int:
 def sensevoice_language(text: str, fallback: str | None) -> str:
     match = re.search(r"<\|(zh|en|yue|ja|ko|nospeech)\|>", text)
     return match.group(1) if match else fallback or "unknown"
+
+
+def timestamp_granularity(segments: list[dict[str, Any]], fallback_single_segment: bool) -> str:
+    """Classify how fine-grained the produced timestamps are.
+
+    - "segment": multiple per-utterance segments with real timing (best case).
+    - "coarse": only one segment spanning the whole audio, so any in-text
+      timestamps must be treated as approximate navigation, not precise cues.
+    """
+    if fallback_single_segment or len(segments) <= 1:
+        return "coarse"
+    return "segment"
 
 
 def funasr_worker(args: argparse.Namespace) -> None:
@@ -585,10 +671,13 @@ def funasr_worker(args: argparse.Namespace) -> None:
                 "text": text,
             })
     text = rich_transcription_postprocess(raw_text).strip()
+    fallback_single_segment = False
     if not segments and text:
         segments = [{"start_ms": 0, "end_ms": audio_duration_ms(args.input), "text": text}]
+        fallback_single_segment = True
     if not segments:
         raise AsrError("FunASR 没有返回可用文字")
+    granularity = timestamp_granularity(segments, fallback_single_segment)
     payload = {
         "schema_version": 1,
         "created_at": utc_now(),
@@ -598,6 +687,7 @@ def funasr_worker(args: argparse.Namespace) -> None:
         "model": args.model_id,
         "quality_tier": "preferred",
         "segment_count": len(segments),
+        "timestamp_granularity": granularity,
         "segments": segments,
         "text": "\n".join(item["text"] for item in segments),
     }
@@ -630,10 +720,12 @@ def mlx_worker(args: argparse.Namespace) -> None:
                 "end_ms": int(float(item.get("end") or 0) * 1000),
                 "text": text,
             })
+    fallback_single_segment = False
     if not segments:
         text = " ".join(str(result.get("text") or "").split())
         if text:
             segments = [{"start_ms": 0, "end_ms": audio_duration_ms(args.input), "text": text}]
+            fallback_single_segment = True
     if not segments:
         raise AsrError("MLX Whisper 没有返回可用文字")
     payload = {
@@ -645,6 +737,7 @@ def mlx_worker(args: argparse.Namespace) -> None:
         "model": args.model,
         "quality_tier": model_quality("mlx-whisper", args.model)["tier"],
         "segment_count": len(segments),
+        "timestamp_granularity": timestamp_granularity(segments, fallback_single_segment),
         "segments": segments,
         "text": "\n".join(item["text"] for item in segments),
     }

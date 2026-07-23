@@ -37,4 +37,4 @@ Before synthesis, verify the checklist count equals `chunk_count`, first and las
 - `详细总结`: organize by topic; cover key arguments, examples, disagreements, and conclusions with important timestamps.
 - `灵感选题`: provide 5-10 evidence-backed ideas. For each include `标题`, `适合平台`, `切入角度`, `可引用观点或原话`, `延展思路`, and `证据时间点`.
 
-Never fabricate quotations or predict virality. Build the canonical document in this order: metadata, quick summary, detailed summary, topic ideas, proofread transcript, Chinese translation only for English, and processing notes.
+Never fabricate quotations or predict virality. Build the canonical document in this order: metadata, quick summary, detailed summary, topic ideas, proofread transcript, Chinese translation only for English, and processing notes. In `处理说明`, when the transcript `timestamp_granularity` is `coarse`, state that timestamps are approximate chapter-level navigation derived without a per-sentence timeline.

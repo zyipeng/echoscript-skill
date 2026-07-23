@@ -65,7 +65,11 @@ python3 scripts/local_asr.py transcribe "/absolute/output/job" \
   --output "/absolute/output/job/transcript.raw.json"
 ```
 
-The command must refuse uncached weights rather than download silently. After approved FunASR setup, run `python3 scripts/local_asr.py setup --backend funasr`. For an explicitly accepted tiny model, add `--model mlx-community/whisper-tiny-mlx --allow-low-quality-model`.
+The command must refuse uncached weights rather than download silently. After approved FunASR setup, run `python3 scripts/local_asr.py setup --backend funasr`. Setup installs the full FunASR runtime including `torch`/`torchaudio`; readiness now requires them, so a model that imports but lacks torch is reported as not ready. For an explicitly accepted tiny model, add `--model mlx-community/whisper-tiny-mlx --allow-low-quality-model`.
+
+For slow default-index downloads, users may export mirror variables before setup: `ECHOSCRIPT_PIP_INDEX_URL` (or `PIP_INDEX_URL`), `ECHOSCRIPT_PIP_EXTRA_INDEX_URL`, `ECHOSCRIPT_HF_ENDPOINT`. Setup streams install progress to stdout.
+
+The transcribe result reports `timestamp_granularity`. When it is `coarse` (only a single whole-audio segment with no per-utterance timeline), a `timestamp_note` is included: any timestamps in the final document are approximate chapter navigation only and must be labeled as such in `处理说明`. Do not present coarse timestamps as precise per-sentence cues.
 
 If a ready MLX model fails with `No Metal device available` in a restricted sandbox, rerun the same local command with host permission; do not switch to an external API.
 
@@ -99,7 +103,7 @@ python3 scripts/document_export.py export "/absolute/output/job/document.md" \
 python3 scripts/document_export.py validate "/absolute/output/job/exports"
 ```
 
-Use a comma-separated selection such as `md`, `docx`, `pdf`, or `docx,pdf`. Visually inspect DOCX or PDF only when selected and rendering tools are available. Fix clipping, broken CJK glyphs, spacing, tables, or pagination before delivery.
+Use a comma-separated selection such as `md`, `docx`, `pdf`, or `docx,pdf`. DOCX/PDF export needs `python-docx`, `pypdf`, and `reportlab`. The exporter auto-discovers a runtime in this order: `ECHOSCRIPT_DOCUMENT_PYTHON` → the skill's own `~/.cache/echoscript-skill/funasr-venv` (or `asr-venv`) → legacy Codex runtimes. If none are ready, it installs the packages into an existing skill venv (avoiding PEP 668 errors on system Python). Visually inspect DOCX or PDF only when selected and rendering tools are available. Fix clipping, broken CJK glyphs, spacing, tables, or pagination before delivery.
 
 ## 6. Report completion
 

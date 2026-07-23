@@ -19,29 +19,89 @@ class ExportError(RuntimeError):
 
 
 DOCUMENT_FONT = "Hiragino Sans GB"
+DOCUMENT_PACKAGES = ("python-docx", "pypdf", "reportlab")
+DEFAULT_CACHE_DIR = Path.home() / ".cache" / "echoscript-skill"
 
 
 def has_document_packages() -> bool:
     return bool(importlib.util.find_spec("docx") and importlib.util.find_spec("pypdf") and importlib.util.find_spec("reportlab"))
 
 
-def find_document_python() -> Path | None:
-    override = os.environ.get("ECHOSCRIPT_DOCUMENT_PYTHON")
+def candidate_document_pythons() -> list[Path]:
+    """Ordered list of Python interpreters that might host docx/pypdf/reportlab.
+
+    Priority:
+    1. Explicit override (ECHOSCRIPT_DOCUMENT_PYTHON)
+    2. The skill's own FunASR/MLX venvs under ~/.cache/echoscript-skill
+       (these already exist after ASR setup and dodge PEP 668 restrictions)
+    3. Legacy Codex runtimes, kept for backward compatibility
+    """
     candidates: list[Path] = []
+    override = os.environ.get("ECHOSCRIPT_DOCUMENT_PYTHON")
     if override:
         candidates.append(Path(override).expanduser())
+    cache_dir = Path(os.environ.get("ECHOSCRIPT_CACHE_DIR", DEFAULT_CACHE_DIR)).expanduser()
+    for venv_name in ("funasr-venv", "asr-venv", "docs-venv"):
+        candidates.append(cache_dir / venv_name / "bin" / "python")
     runtime_root = Path.home() / ".cache" / "codex-runtimes"
     candidates.extend(sorted(runtime_root.glob("*/dependencies/python/bin/python3"), reverse=True))
-    for candidate in candidates:
-        if not candidate.is_file() or candidate.resolve() == Path(sys.executable).resolve():
+    return candidates
+
+
+def python_can_export(candidate: Path) -> bool:
+    # Compare unresolved paths: a venv's python is a symlink that resolve()s to
+    # the same base interpreter as sys.executable, but it uses the venv's own
+    # site-packages. Using the raw path lets us detect the isolated venv while
+    # still skipping the literal current interpreter. Relaunch loops are
+    # separately prevented by the ECHOSCRIPT_DOCUMENT_RUNTIME flag.
+    if not candidate.is_file() or candidate == Path(sys.executable):
+        return False
+    result = subprocess.run(
+        [str(candidate), "-c", "import docx, pypdf, reportlab"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    return result.returncode == 0
+
+
+def find_document_python() -> Path | None:
+    return next((c for c in candidate_document_pythons() if python_can_export(c)), None)
+
+
+def pip_mirror_env() -> dict[str, str]:
+    environment = os.environ.copy()
+    pip_index = os.environ.get("ECHOSCRIPT_PIP_INDEX_URL") or os.environ.get("PIP_INDEX_URL")
+    if pip_index:
+        environment["PIP_INDEX_URL"] = pip_index
+    pip_extra = os.environ.get("ECHOSCRIPT_PIP_EXTRA_INDEX_URL")
+    if pip_extra:
+        environment["PIP_EXTRA_INDEX_URL"] = pip_extra
+    return environment
+
+
+def provision_document_python() -> Path | None:
+    """Install docx/pypdf/reportlab into an existing skill venv.
+
+    The system Python is often externally-managed (PEP 668) so a plain
+    `pip install python-docx` fails. Instead we reuse the isolated venv created
+    during ASR setup and install the document packages there.
+    """
+    cache_dir = Path(os.environ.get("ECHOSCRIPT_CACHE_DIR", DEFAULT_CACHE_DIR)).expanduser()
+    for venv_name in ("funasr-venv", "asr-venv"):
+        venv_python = cache_dir / venv_name / "bin" / "python"
+        if not venv_python.is_file():
             continue
-        result = subprocess.run(
-            [str(candidate), "-c", "import docx, pypdf, reportlab"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+        print(
+            f"[echoscript] 正在向隔离环境 {venv_python} 安装文档导出依赖："
+            f"{', '.join(DOCUMENT_PACKAGES)}",
+            flush=True,
         )
-        if result.returncode == 0:
-            return candidate
+        result = subprocess.run(
+            [str(venv_python), "-m", "pip", "install", *DOCUMENT_PACKAGES],
+            env=pip_mirror_env(),
+        )
+        if result.returncode == 0 and python_can_export(venv_python):
+            return venv_python
     return None
 
 
@@ -50,7 +110,14 @@ def maybe_relaunch() -> int | None:
         return None
     candidate = find_document_python()
     if not candidate:
-        raise ExportError("缺少 python-docx/pypdf，也没有找到 Codex 文档运行时")
+        # No ready runtime; try to provision one into an existing skill venv.
+        candidate = provision_document_python()
+    if not candidate:
+        raise ExportError(
+            "缺少 python-docx/pypdf/reportlab，且未找到可用的隔离运行时。"
+            "请先运行 local_asr.py setup 创建 FunASR 环境，或设置 "
+            "ECHOSCRIPT_DOCUMENT_PYTHON 指向已装好这些依赖的 Python。"
+        )
     environment = os.environ.copy()
     environment["ECHOSCRIPT_DOCUMENT_RUNTIME"] = "1"
     result = subprocess.run([str(candidate), str(Path(__file__).resolve()), *sys.argv[1:]], env=environment)
