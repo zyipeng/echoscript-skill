@@ -18,22 +18,6 @@ English quick links: [Quick start](#quick-start) · [Claude Code](#claude-code-i
 
 复制这个项目链接，发送给你的agent，说帮我安装这个skill，并将这个播客链接转成文字稿，输出为md/word/pdf 格式文档。（初次使用时需要先安装本地ASR模型）
 
-```bash
-# 1. 安装（以 Claude Code 个人 Skill 为例）
-git clone https://github.com/zyipeng/echoscript-skill.git ~/.claude/skills/echoscript
-
-# 2. 检查依赖（媒体获取 + 本地 ASR，不会自动下载模型）
-cd ~/.claude/skills/echoscript
-python3 scripts/media_ingest.py doctor
-python3 scripts/local_asr.py doctor
-```
-
-然后在 Agent 里一句话说清「来源 + 范围 + 格式」即可：
-
-```text
-处理这个小宇宙链接，生成摘要版，只导出 Markdown：<链接>
-```
-
 ### 你可以用它做什么
 
 支持的输入：
