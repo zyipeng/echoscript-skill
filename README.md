@@ -2,14 +2,6 @@
 
 > 🎙️ EchoScript是一个长音频转文稿处理 Skill，可以把 YouTube / 哔哩哔哩 / 小宇宙 / 本地音视频，一步转成校对文字稿、中文翻译、摘要、内容总结和选题推荐，并按需导出 Markdown / Word / PDF 格式文件。
 
-<p align="center">
-  <img alt="platform" src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20WSL2-blue">
-  <img alt="python" src="https://img.shields.io/badge/python-3.10%2B-3776AB">
-  <img alt="ASR" src="https://img.shields.io/badge/ASR-FunASR%20%7C%20MLX%20Whisper-success">
-  <img alt="LLM" src="https://img.shields.io/badge/LLM-无需外部%20API-orange">
-  <img alt="agents" src="https://img.shields.io/badge/agents-Claude%20Code%20%7C%20Codex%20%7C%20SKILL.md-informational">
-</p>
-
 [简体中文](#简体中文) · [English](#english)
 
 中文快速入口：[30 秒上手](#30-秒上手) · [Claude Code 安装](#安装到-claude-code) · [Codex 安装](#安装到-codex) · [其他 Agent](#在其他-agent-中使用) · [环境变量](#环境变量与镜像加速) · [常见问题](#常见问题)
