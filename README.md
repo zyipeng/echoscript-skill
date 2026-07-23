@@ -1,6 +1,6 @@
-# EchoScript
+# EchoScript·声坊
 
-> 🎙️ 本地优先的媒体整理 Agent Skill —— 把 YouTube / 哔哩哔哩 / 小宇宙 / 本地音视频，一步转成校对文字稿、中文翻译、摘要与选题，并按需导出 Markdown / Word / PDF。
+> 🎙️ EchoScript是一个长音频转文稿处理 Skill，可以把 YouTube / 哔哩哔哩 / 小宇宙 / 本地音视频，一步转成校对文字稿、中文翻译、摘要、内容总结和选题推荐，并按需导出 Markdown / Word / PDF 格式文件。
 
 <p align="center">
   <img alt="platform" src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20WSL2-blue">
@@ -16,20 +16,15 @@
 
 English quick links: [Quick start](#quick-start) · [Claude Code](#claude-code-installation) · [Codex](#codex-installation) · [Other agents](#other-agents-and-custom-locations) · [Environment](#environment-variables-and-mirrors) · [Troubleshooting](#troubleshooting)
 
-EchoScript 是一个兼容 Agent Skills / `SKILL.md` 工作流的本地优先媒体整理工具。它可以从 YouTube、哔哩哔哩、小宇宙或本地音视频中获取字幕或音频，生成校对文字稿、英文到中文翻译、内容总结，并按需导出 Markdown、Word 或 PDF。
-
-**它的特别之处：**
-
-- 🔒 **本地优先，隐私可控** —— ASR 在本机跑（FunASR / MLX Whisper），不额外调用第三方 LLM API。
-- 🧩 **不绑定单一 Agent** —— Claude Code、Codex，以及任何能读取 `SKILL.md` 并执行本地脚本的 Agent 都能用。
-- 🎯 **按需产出，不浪费 Token** —— 摘要版 / 完整版自由选，导出格式自由选，绝不默认生成三份。
-- ⚙️ **开箱即用的运行时** —— `setup` 自动装齐 FunASR 运行时（含 `torch`），导出依赖在隔离环境中自动补齐，绕开系统 Python 的 PEP 668 限制。
-
 ---
 
 ## 简体中文
 
 ### 30 秒上手
+
+#### 一句话操作指南：
+
+复制这个项目链接，发送给你的agent，说帮我安装这个skill，并将这个播客链接转成文字稿，输出为md/word/pdf 格式文档。（初次使用时需要先安装本地ASR模型）
 
 ```bash
 # 1. 安装（以 Claude Code 个人 Skill 为例）
@@ -66,7 +61,7 @@ python3 scripts/local_asr.py doctor
 - 分别生成 `快速摘要`、`详细总结`、`灵感选题`
 - 只导出你选择的 Markdown、Word DOCX、PDF 格式
 
-翻译、校对和总结由当前 Agent 自身完成，EchoScript 不再额外接入另一套 LLM API。Notion 和飞书同步属于后续阶段，当前版本只生成本地文件。
+翻译、校对和总结由当前 Agent 自身完成，EchoScript 不再额外接入另一套 LLM API。如果是超长音频，尽量使用高性价比模型，减少成本～～
 
 ### 工作流一览
 
@@ -305,7 +300,6 @@ python3 scripts/local_asr.py setup --backend funasr
 - 小宇宙：解析公开节目页面和音频地址，通常需要本地 ASR。
 - 本地转写由本机 ASR 完成；EchoScript 不额外调用第三方 LLM API。校对、翻译和总结会进入当前宿主 Agent 的上下文，仍应遵循 Claude Code、Codex 或其他宿主的隐私与数据政策。
 - 浏览器登录态：只有用户对当前来源明确授权后才能使用。
-- 云端同步：当前不包含 Notion 或飞书上传。
 
 ### 手动运行脚本
 
