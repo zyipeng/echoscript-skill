@@ -5,8 +5,10 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
+from difflib import SequenceMatcher
 import html as html_module
 from html.parser import HTMLParser
+import io
 import json
 import mimetypes
 import os
@@ -17,8 +19,9 @@ import subprocess
 import sys
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import urljoin, urlparse
+from urllib.parse import parse_qs, parse_qsl, urlencode, urljoin, urlparse, urlunparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
+import zipfile
 
 
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 EchoScript/1.0"
@@ -27,6 +30,8 @@ TRANSCRIPT_EXTENSIONS = {".vtt", ".srt", ".txt", ".md"}
 XIAOYUZHOU_PAGE_HOSTS = {"xiaoyuzhoufm.com", "www.xiaoyuzhoufm.com"}
 XIAOYUZHOU_AUDIO_HOSTS = {"media.xyzcdn.net"}
 LANGUAGE_PREFERENCES = ["zh-hans", "zh-cn", "zh", "zh-hant", "en"]
+PUBLISHER_ARCHIVE_LIMIT = 75 * 1024 * 1024
+PUBLISHER_ARCHIVE_UNCOMPRESSED_LIMIT = 150 * 1024 * 1024
 
 
 class IngestError(RuntimeError):
@@ -86,6 +91,27 @@ def request_json(url: str, *, referer: str | None = None, timeout: int = 30) -> 
     if isinstance(value, dict) and "code" in value and value.get("code") not in (0, None):
         raise IngestError(str(value.get("message") or f"平台接口错误：{value.get('code')}"))
     return value
+
+
+def request_bytes_limited(
+    url: str, *, max_bytes: int, referer: str | None = None, timeout: int = 120
+) -> tuple[bytes, str, str]:
+    headers = {"User-Agent": USER_AGENT, "Accept": "*/*"}
+    if referer:
+        headers["Referer"] = referer
+    try:
+        with urlopen(Request(url, headers=headers), timeout=timeout) as response:
+            content_length = response.headers.get("Content-Length")
+            if content_length and int(content_length) > max_bytes:
+                raise IngestError(f"发布者文稿归档超过安全上限（{max_bytes // 1024 // 1024} MB）")
+            raw = response.read(max_bytes + 1)
+            if len(raw) > max_bytes:
+                raise IngestError(f"发布者文稿归档超过安全上限（{max_bytes // 1024 // 1024} MB）")
+            return raw, response.headers.get_content_type(), response.geturl()
+    except HTTPError as error:
+        raise IngestError(f"请求失败（HTTP {error.code}）：{url}") from error
+    except URLError as error:
+        raise IngestError(f"无法访问：{url}") from error
 
 
 def timestamp_ms(value: str) -> int:
@@ -256,8 +282,45 @@ def yt_dlp_command(args: argparse.Namespace) -> list[str]:
     return command
 
 
+def youtube_video_id(source: str) -> str:
+    parsed = urlparse(source)
+    host = (parsed.hostname or "").lower()
+    candidate = ""
+    if host == "youtu.be":
+        candidate = parsed.path.strip("/").split("/")[0]
+    elif host in {"youtube.com", "www.youtube.com", "m.youtube.com"}:
+        if parsed.path == "/watch":
+            candidate = (parse_qs(parsed.query).get("v") or [""])[0]
+        else:
+            match = re.match(r"^/(?:shorts|embed|live)/([^/?#]+)", parsed.path)
+            candidate = match.group(1) if match else ""
+    if not re.fullmatch(r"[0-9A-Za-z_-]{11}", candidate):
+        raise IngestError("没有识别到有效的 YouTube 视频 ID")
+    return candidate
+
+
+def youtube_oembed(source: str) -> dict[str, Any]:
+    video_id = youtube_video_id(source)
+    canonical = f"https://www.youtube.com/watch?v={video_id}"
+    endpoint = "https://www.youtube.com/oembed?" + urlencode({"url": canonical, "format": "json"})
+    payload = request_json(endpoint, referer=canonical)
+    return {
+        "id": video_id,
+        "webpage_url": canonical,
+        "title": payload.get("title") or f"YouTube {video_id}",
+        "channel": payload.get("author_name") or "",
+        "uploader": payload.get("author_name") or "",
+        "thumbnail": payload.get("thumbnail_url") or "",
+        "thumbnails": [],
+        "description": "",
+        "upload_date": "",
+        "duration": None,
+        "language": None,
+    }
+
+
 def youtube_caption(metadata: dict[str, Any], source: str) -> tuple[dict[str, Any] | None, str | None]:
-    candidates: list[tuple[int, int, str, dict[str, Any]]] = []
+    candidates: list[tuple[int, int, int, str, str, dict[str, Any]]] = []
     for kind_priority, (kind, collection) in enumerate([
         ("manual-subtitle", metadata.get("subtitles") or {}),
         ("automatic-caption", metadata.get("automatic_captions") or {}),
@@ -282,33 +345,294 @@ def youtube_caption(metadata: dict[str, Any], source: str) -> tuple[dict[str, An
     return None, None
 
 
-def ingest_youtube(source: str, args: argparse.Namespace, output_dir: Path) -> tuple[dict[str, Any], dict[str, Any] | None]:
-    command = yt_dlp_command(args) + ["--dump-single-json", "--no-playlist", "--skip-download", source]
-    result = run(command, timeout=180)
+def normalized_match_text(value: str) -> str:
+    return " ".join(re.findall(r"[0-9a-z\u3400-\u4dbf\u4e00-\u9fff]+", html_module.unescape(value).casefold()))
+
+
+def title_match_score(expected: str, candidate: str) -> float:
+    left = normalized_match_text(expected)
+    right = normalized_match_text(candidate)
+    if not left or not right:
+        return 0.0
+    ratio = SequenceMatcher(None, left, right).ratio()
+    left_tokens = set(left.split())
+    right_tokens = set(right.split())
+    overlap = len(left_tokens & right_tokens) / max(len(left_tokens | right_tokens), 1)
+    return max(ratio, overlap)
+
+
+def apple_podcast_episode(title: str, author: str) -> dict[str, Any] | None:
+    term = " ".join(part for part in (title, author) if part).strip()
+    endpoint = "https://itunes.apple.com/search?" + urlencode({
+        "term": term,
+        "media": "podcast",
+        "entity": "podcastEpisode",
+        "limit": 20,
+        "country": "US",
+    })
+    payload = request_json(endpoint)
+    ranked: list[tuple[float, dict[str, Any]]] = []
+    for item in payload.get("results") or []:
+        if not isinstance(item, dict):
+            continue
+        score = title_match_score(title, str(item.get("trackName") or ""))
+        if score >= 0.72:
+            ranked.append((score, item))
+    return max(ranked, key=lambda value: value[0])[1] if ranked else None
+
+
+def transcript_links(description: str) -> list[str]:
+    decoded = html_module.unescape(description or "")
+    links: list[str] = []
+    for match in re.finditer(r"https?://[^\s<>\"']+", decoded):
+        url = match.group(0).rstrip(".,;:)]}")
+        context = decoded[max(0, match.start() - 140):match.start()].casefold()
+        if "transcript" in context and url not in links:
+            links.append(url)
+    return links
+
+
+def dropbox_download_url(value: str) -> str:
+    parsed = urlparse(value)
+    if (parsed.hostname or "").lower() not in {"dropbox.com", "www.dropbox.com"}:
+        return value
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    query["dl"] = "1"
+    return urlunparse(parsed._replace(query=urlencode(query), fragment=""))
+
+
+def transcript_name_tokens(value: str) -> set[str]:
+    ignored = {
+        "the", "and", "with", "from", "into", "this", "that", "why", "how", "what",
+        "for", "not", "era", "podcast", "episode", "full", "transcript", "interview",
+    }
+    return {
+        token for token in normalized_match_text(value).split()
+        if len(token) >= 3 and not token.isdigit() and token not in ignored
+    }
+
+
+def parse_release_date(value: str) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
     try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def select_transcript_member(
+    archive: zipfile.ZipFile, *, title: str, release_date: str
+) -> zipfile.ZipInfo | None:
+    title_tokens = transcript_name_tokens(title)
+    released = parse_release_date(release_date)
+    ranked: list[tuple[tuple[float, int, int, int], zipfile.ZipInfo]] = []
+    for item in archive.infolist():
+        if item.is_dir() or Path(item.filename).suffix.lower() not in TRANSCRIPT_EXTENSIONS:
+            continue
+        if item.file_size <= 0 or item.file_size > 2 * 1024 * 1024:
+            continue
+        name_tokens = transcript_name_tokens(Path(item.filename).stem)
+        overlap = len(title_tokens & name_tokens)
+        if overlap < 2:
+            continue
+        coverage = overlap / max(len(name_tokens), 1)
+        if coverage < 0.65:
+            continue
+        days = 36500
+        if released:
+            item_date = datetime(*item.date_time, tzinfo=timezone.utc)
+            days = abs((released - item_date).days)
+        snippet = archive.read(item)[:12000].decode("utf-8-sig", errors="replace")
+        content_overlap = len(title_tokens & transcript_name_tokens(snippet))
+        ranked.append(((coverage, overlap, -days, content_overlap), item))
+    return max(ranked, key=lambda value: value[0])[1] if ranked else None
+
+
+def parse_publisher_transcript(text: str, *, duration_ms: int | None = None) -> list[dict[str, Any]]:
+    header = re.compile(r"^(?:(?P<speaker>.+?)\s+)?\((?P<time>\d{1,2}:\d{2}:\d{2})\):\s*$")
+    records: list[dict[str, Any]] = []
+    current_speaker = ""
+    current: dict[str, Any] | None = None
+    body: list[str] = []
+
+    def finish() -> None:
+        nonlocal body, current
+        if not current:
+            return
+        text_value = clean_caption_text(" ".join(body))
+        if text_value:
+            records.append({**current, "text": text_value})
+        body = []
+        current = None
+
+    for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        match = header.match(line.strip())
+        if match:
+            finish()
+            speaker = clean_caption_text(match.group("speaker") or "") or current_speaker
+            if speaker:
+                current_speaker = speaker
+            current = {"start_ms": timestamp_ms(match.group("time")), "speaker": speaker}
+        elif current and line.strip():
+            body.append(line.strip())
+    finish()
+    if len(records) < 3:
+        return []
+    for index, item in enumerate(records):
+        next_start = records[index + 1]["start_ms"] if index + 1 < len(records) else duration_ms
+        item["end_ms"] = max(item["start_ms"], int(next_start or item["start_ms"]))
+    return records
+
+
+def publisher_transcript_from_archive(
+    episode: dict[str, Any], *, title: str, source: str
+) -> tuple[dict[str, Any] | None, dict[str, str]]:
+    description = str(episode.get("description") or "")
+    duration_ms = int(episode.get("trackTimeMillis") or 0) or None
+    for link in transcript_links(description):
+        parsed = urlparse(link)
+        if (parsed.hostname or "").lower() not in {"dropbox.com", "www.dropbox.com"} and not parsed.path.lower().endswith(".zip"):
+            continue
+        try:
+            raw, _, _ = request_bytes_limited(
+                dropbox_download_url(link),
+                max_bytes=PUBLISHER_ARCHIVE_LIMIT,
+                timeout=180,
+            )
+            if not raw.startswith(b"PK"):
+                continue
+            with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+                entries = archive.infolist()
+                if len(entries) > 1000 or sum(item.file_size for item in entries) > PUBLISHER_ARCHIVE_UNCOMPRESSED_LIMIT:
+                    raise IngestError("发布者文稿归档超过安全解压上限")
+                member = select_transcript_member(
+                    archive,
+                    title=title,
+                    release_date=str(episode.get("releaseDate") or ""),
+                )
+                if not member:
+                    continue
+                text = archive.read(member).decode("utf-8-sig", errors="replace")
+            segments = parse_publisher_transcript(text, duration_ms=duration_ms)
+            if not segments:
+                continue
+            payload = transcript_payload(
+                segments,
+                language="zh" if re.search(r"[\u3400-\u4dbf\u4e00-\u9fff]", text) else "en",
+                kind="publisher-transcript",
+                source=source,
+            )
+            payload["publisher_transcript_url"] = link
+            payload["publisher_archive_member"] = member.filename
+            return payload, {
+                "publisher_transcript_url": link,
+                "publisher_archive_member": member.filename,
+            }
+        except (IngestError, zipfile.BadZipFile, RuntimeError):
+            continue
+    return None, {}
+
+
+def download_podcast_audio(episode: dict[str, Any], output_dir: Path) -> str:
+    url = str(episode.get("episodeUrl") or episode.get("previewUrl") or "")
+    parsed = urlparse(url)
+    if parsed.scheme != "https" or not parsed.hostname:
+        raise IngestError("Apple Podcasts 没有返回安全的 HTTPS 音频地址")
+    extension = Path(parsed.path).suffix.lower()
+    if extension not in MEDIA_EXTENSIONS:
+        extension = "." + str(episode.get("episodeFileExtension") or "mp3").lower().lstrip(".")
+    if extension not in MEDIA_EXTENSIONS:
+        extension = ".mp3"
+    media_dir = output_dir / "media"
+    media_dir.mkdir(parents=True, exist_ok=True)
+    destination = media_dir / f"source{extension}"
+    curl = shutil.which("curl") or "/usr/bin/curl"
+    run([
+        curl, "--fail", "--location", "--retry", "3", "--retry-delay", "1",
+        "--connect-timeout", "15", "--max-time", "7200", "--no-progress-meter",
+        "-A", USER_AGENT, "-o", str(destination), url,
+    ], timeout=7250)
+    return str(destination.resolve())
+
+
+def ingest_youtube(source: str, args: argparse.Namespace, output_dir: Path) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    youtube_error: IngestError | None = None
+    metadata_from_ytdlp = True
+    try:
+        command = yt_dlp_command(args) + ["--dump-single-json", "--no-playlist", "--skip-download", source]
+        result = run(command, timeout=180)
         metadata = json.loads(result.stdout)
-    except json.JSONDecodeError as error:
-        raise IngestError("yt-dlp 没有返回有效的 YouTube 元数据") from error
+    except (IngestError, json.JSONDecodeError) as error:
+        youtube_error = error if isinstance(error, IngestError) else IngestError("yt-dlp 没有返回有效的 YouTube 元数据")
+        metadata = youtube_oembed(source)
+        metadata_from_ytdlp = False
     transcript, language = youtube_caption(metadata, source)
+    episode: dict[str, Any] | None = None
+    publisher_details: dict[str, str] = {}
+    if not transcript:
+        try:
+            episode = apple_podcast_episode(
+                str(metadata.get("title") or ""),
+                str(metadata.get("channel") or metadata.get("uploader") or ""),
+            )
+        except IngestError:
+            episode = None
+        if episode:
+            transcript, publisher_details = publisher_transcript_from_archive(
+                episode,
+                title=str(metadata.get("title") or ""),
+                source=source,
+            )
+            language = str(transcript.get("language") or "") if transcript else None
     audio_path: str | None = None
+    acquisition_fallback: str | None = "apple-podcasts-publisher-transcript" if transcript and publisher_details else None
     if (not transcript or args.always_audio) and not args.metadata_only:
-        media_dir = output_dir / "media"
-        media_dir.mkdir(parents=True, exist_ok=True)
-        template = str(media_dir / "source.%(ext)s")
-        download = yt_dlp_command(args) + [
-            "--no-playlist", "-x", "--audio-format", "m4a", "--audio-quality", "0",
-            "-o", template, source,
-        ]
-        run(download, timeout=7200)
-        files = sorted(media_dir.glob("source.*"), key=lambda path: path.stat().st_mtime, reverse=True)
-        if not files:
-            raise IngestError("YouTube 音频下载完成但没有找到输出文件")
-        audio_path = str(files[0].resolve())
+        if metadata_from_ytdlp:
+            media_dir = output_dir / "media"
+            media_dir.mkdir(parents=True, exist_ok=True)
+            template = str(media_dir / "source.%(ext)s")
+            download = yt_dlp_command(args) + [
+                "--no-playlist", "-x", "--audio-format", "m4a", "--audio-quality", "0",
+                "-o", template, source,
+            ]
+            try:
+                run(download, timeout=7200)
+                files = sorted(media_dir.glob("source.*"), key=lambda path: path.stat().st_mtime, reverse=True)
+                if files:
+                    audio_path = str(files[0].resolve())
+            except IngestError as error:
+                youtube_error = error
+        if not audio_path and episode:
+            audio_path = download_podcast_audio(episode, output_dir)
+            acquisition_fallback = "apple-podcasts-audio"
+        if not audio_path:
+            detail = "匿名 YouTube 请求被限制，且没有找到匹配的公开播客音频。"
+            if not args.cookies_from_browser:
+                detail += " 如要使用当前浏览器登录态，请先取得用户许可，再传入 --cookies-from-browser chrome。"
+            raise IngestError(detail) from youtube_error
     thumbnails = metadata.get("thumbnails") or []
     largest = max(thumbnails, key=lambda item: int(item.get("width") or 0), default={})
     published = str(metadata.get("upload_date") or "")
     if re.fullmatch(r"\d{8}", published):
         published = f"{published[:4]}-{published[4:6]}-{published[6:]}"
+    if episode:
+        published = published or str(episode.get("releaseDate") or "")
+        metadata["description"] = metadata.get("description") or episode.get("description") or ""
+        metadata["duration"] = metadata.get("duration") or (
+            round(int(episode.get("trackTimeMillis") or 0) / 1000, 3) or None
+        )
+        metadata["thumbnail"] = metadata.get("thumbnail") or episode.get("artworkUrl600") or ""
+    youtube_access_status = "ok"
+    if youtube_error and not metadata_from_ytdlp:
+        error_text = str(youtube_error).casefold()
+        if "bot" in error_text or "sign in to confirm" in error_text:
+            youtube_access_status = "anonymous-request-blocked"
+        elif "缺少 yt-dlp" in str(youtube_error):
+            youtube_access_status = "primary-tool-unavailable"
+        else:
+            youtube_access_status = "primary-extraction-failed"
     manifest = {
         "platform": "youtube",
         "source_url": metadata.get("webpage_url") or source,
@@ -322,6 +646,11 @@ def ingest_youtube(source: str, args: argparse.Namespace, output_dir: Path) -> t
         "audio_path": audio_path,
         "transcript_origin": transcript.get("transcript_kind") if transcript else None,
         "platform_id": metadata.get("id"),
+        "youtube_access_status": youtube_access_status,
+        "acquisition_fallback": acquisition_fallback,
+        "publisher_episode_url": episode.get("trackViewUrl") if episode else None,
+        "publisher_audio_url": episode.get("episodeUrl") if episode else None,
+        **publisher_details,
     }
     return manifest, transcript
 

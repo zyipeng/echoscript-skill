@@ -4,12 +4,15 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
+import io
 import json
 import os
 from pathlib import Path
 import shutil
 import subprocess
 import sys
+import zipfile
 
 
 def run(command: list[str]) -> None:
@@ -46,6 +49,42 @@ def main() -> int:
     ])
     ingest_dir = output / "local-ingest"
     run([sys.executable, str(root / "media_ingest.py"), "ingest", str(audio), "--output-dir", str(ingest_dir)])
+
+    media_spec = importlib.util.spec_from_file_location("echoscript_media_ingest", root / "media_ingest.py")
+    if not media_spec or not media_spec.loader:
+        raise RuntimeError("could not load media_ingest.py for parser tests")
+    media_module = importlib.util.module_from_spec(media_spec)
+    media_spec.loader.exec_module(media_module)
+    publisher_sample = """Lenny Rachitsky (00:00:00):
+Opening statement.
+
+Elizabeth Stone (00:00:08):
+First answer.
+
+(00:00:12):
+Same speaker continuation.
+"""
+    publisher_segments = media_module.parse_publisher_transcript(publisher_sample, duration_ms=20000)
+    if len(publisher_segments) != 3 or publisher_segments[-1]["speaker"] != "Elizabeth Stone":
+        raise RuntimeError("publisher transcript parser did not preserve timestamps and speakers")
+    if publisher_segments[-1]["end_ms"] != 20000:
+        raise RuntimeError("publisher transcript parser did not cover the supplied duration")
+
+    archive_buffer = io.BytesIO()
+    with zipfile.ZipFile(archive_buffer, "w") as archive:
+        older = zipfile.ZipInfo("Elizabeth Stone.txt", date_time=(2026, 1, 14, 12, 0, 0))
+        newer = zipfile.ZipInfo("Elizabeth Stone 2.0.txt", date_time=(2026, 7, 19, 12, 0, 0))
+        archive.writestr(older, publisher_sample)
+        archive.writestr(newer, publisher_sample.replace("Opening", "Current opening"))
+        archive.writestr("Unrelated Guest.txt", publisher_sample)
+    with zipfile.ZipFile(io.BytesIO(archive_buffer.getvalue())) as archive:
+        selected = media_module.select_transcript_member(
+            archive,
+            title="Why Netflix is betting on systems thinkers—not specialists—in the AI era | Elizabeth Stone (CPTO)",
+            release_date="2026-07-19T12:31:21Z",
+        )
+    if not selected or selected.filename != "Elizabeth Stone 2.0.txt":
+        raise RuntimeError("publisher archive matcher did not select the current episode transcript")
 
     isolated = output / "asr-detection"
     empty_env = os.environ.copy()
@@ -210,6 +249,10 @@ def main() -> int:
         },
         "single_format_export": single_files,
         "placeholder_rejected": True,
+        "youtube_publisher_fallback": {
+            "segments_parsed": len(publisher_segments),
+            "archive_member": selected.filename,
+        },
         "ingest_manifest": str(ingest_dir / "source.json"),
         "chunk_index": str(chunks_dir / "index.json"),
         "exports": [str(path) for path in sorted(exports.iterdir())],

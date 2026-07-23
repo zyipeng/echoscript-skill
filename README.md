@@ -271,7 +271,7 @@ python3 scripts/local_asr.py setup --backend funasr
 
 ### 平台和隐私说明
 
-- YouTube：优先获取公开字幕；部分视频可能受到登录或反自动化限制。
+- YouTube：优先获取公开字幕。若匿名 `yt-dlp` 被登录或反自动化限制拦截，会继续读取公开 oEmbed 元数据；对于播客型视频，再以高置信度标题匹配 Apple Podcasts，优先使用发布者提供的文稿归档，否则获取同一集公开音频供本地 ASR。不会自动读取浏览器 Cookie。
 - 哔哩哔哩：优先使用公开接口获取元数据、字幕和音频，不把 yt-dlp 作为默认 B 站路径。
 - 小宇宙：解析公开节目页面和音频地址，通常需要本地 ASR。
 - 本地转写由本机 ASR 完成；EchoScript 不额外调用第三方 LLM API。校对、翻译和总结会进入当前宿主 Agent 的上下文，仍应遵循 Claude Code、Codex 或其他宿主的隐私与数据政策。
@@ -321,6 +321,10 @@ python3 scripts/document_export.py validate "/absolute/output/job/exports"
 #### 提示缺少 FFmpeg、FFprobe、curl 或 yt-dlp
 
 先运行 `media_ingest.py doctor`，按输出安装缺失项。FFprobe 通常随 FFmpeg 一起安装。
+
+#### YouTube 提示“Sign in to confirm you’re not a bot”
+
+先直接使用最新版 EchoScript 重试。脚本会自动尝试公开元数据和发布者播客来源，并在 `source.json` 的 `youtube_access_status`、`acquisition_fallback` 与 `publisher_*` 字段中记录实际路径。只有这些公开路径都失败、且用户明确允许读取当前来源的登录态后，才使用 `--cookies-from-browser chrome`。
 
 #### 本地没有 ASR 模型
 
@@ -572,7 +576,7 @@ The exporter discovers a runtime in this order: `ECHOSCRIPT_DOCUMENT_PYTHON` →
 
 ### Platform, privacy, and current scope
 
-- YouTube: public subtitles are preferred; sign-in and anti-automation restrictions may still apply.
+- YouTube: public subtitles are preferred. If anonymous `yt-dlp` access is blocked, EchoScript continues with public oEmbed metadata; for podcast-style videos it requires a high-confidence Apple Podcasts title match, then prefers a publisher transcript archive and otherwise obtains the same episode's public audio for local ASR. Browser cookies are never read automatically.
 - Bilibili: public APIs are preferred for metadata, subtitles, and audio; yt-dlp is not the default Bilibili path.
 - Xiaoyuzhou: public episode metadata and audio are parsed; local ASR is usually required.
 - ASR runs locally, and EchoScript does not call a separate third-party LLM API. Proofreading, translation, and summarization still enter the current host agent's context and remain subject to that host's privacy and data policies.
@@ -586,6 +590,8 @@ The exporter discovers a runtime in this order: `ECHOSCRIPT_DOCUMENT_PYTHON` →
 **Codex does not discover `$echoscript`:** verify `~/.codex/skills/echoscript/SKILL.md` and start a new task after installation.
 
 **A media dependency is missing:** run `python3 scripts/media_ingest.py doctor`. FFprobe normally ships with FFmpeg.
+
+**YouTube says “Sign in to confirm you’re not a bot”:** retry with the current EchoScript version. It automatically attempts public metadata and publisher podcast sources, recording the route in `youtube_access_status`, `acquisition_fallback`, and `publisher_*` fields in `source.json`. Use `--cookies-from-browser chrome` only after those public paths fail and the user explicitly approves access to the signed-in session for that source.
 
 **No local ASR model exists:** run `python3 scripts/local_asr.py doctor` and follow `recommended_action`; model setup still requires approval.
 

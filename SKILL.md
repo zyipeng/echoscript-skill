@@ -49,6 +49,8 @@ python3 scripts/media_ingest.py ingest "SOURCE" --output-dir "/absolute/output/j
 
 This writes `source.json` and either `transcript.raw.json` or a local audio path. If ingest fails, then read [references/platforms.md](references/platforms.md) and follow only the relevant platform section.
 
+For YouTube, the script does not stop when anonymous `yt-dlp` metadata extraction is blocked. It falls back to public oEmbed metadata, searches Apple Podcasts for a high-confidence title match, uses a publisher-linked transcript archive when available, and otherwise uses the matched public podcast audio for local ASR. The manifest records this as `acquisition_fallback`; browser cookies remain opt-in only.
+
 ## 3. Transcribe only when needed
 
 Skip ASR when `transcript.raw.json` exists. Otherwise inspect the JSON from `local_asr.py doctor` and follow `recommended_action`:

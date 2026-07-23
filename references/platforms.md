@@ -8,9 +8,10 @@ Always prefer the least lossy and least privileged source:
 
 1. Human-authored subtitles.
 2. Platform auto-captions.
-3. Public audio downloaded for local ASR.
-4. A user-provided local audio/video file.
-5. Manual transcript paste when a platform blocks all automated access.
+3. A publisher-provided transcript discovered through the matching podcast episode.
+4. Public platform or publisher audio downloaded for local ASR.
+5. A user-provided local audio/video file.
+6. Manual transcript paste when a platform blocks all automated access.
 
 Record the selected source in `source.json`. Never present auto-captions as human-authored subtitles.
 
@@ -18,8 +19,10 @@ Record the selected source in `source.json`. Never present auto-captions as huma
 
 - Use `yt-dlp` for public metadata, subtitles, and audio.
 - Treat access as best-effort. A public page visible in a browser can still reject server-side extraction with bot or sign-in checks.
+- When primary extraction fails, EchoScript automatically tries public YouTube oEmbed metadata. For podcast-like videos, it then requires a high-confidence Apple Podcasts episode-title match before using a publisher-linked transcript archive or the public podcast audio.
+- Publisher archive downloads are size-limited, checked as ZIP files, and matched by episode title and release date. The selected archive member and source URL are recorded in `source.json`.
 - Do not promise that every public video exposes a transcript.
-- If public extraction fails, offer local upload or manual transcript paste first.
+- If neither YouTube nor a matching publisher source is available, offer local upload or manual transcript paste first.
 - Use `--cookies-from-browser chrome` only after explicit approval. This reads the user's signed-in browser session for the exact operation.
 
 Example after approval:
